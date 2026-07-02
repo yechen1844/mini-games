@@ -1288,6 +1288,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       allPlayers.push({
         id: "user",
         name: userName,
+        realName: (userPersona && userPersona.name) || "",
+        handle: (userPersona && userPersona.handle) || "",
         isUser: true,
         personaText: userPersonaText,
         avatar: userAvatar
@@ -1296,6 +1298,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         allPlayers.push({
           id: cd.id,
           name: cd.handle || cd.name || ('角色' + cd.id),
+          realName: cd.name || "",
+          handle: cd.handle || "",
           isUser: false,
           personaText: cd.persona || cd.bio || "",
           avatar: cd.avatar || ""
@@ -1618,7 +1622,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       else if (entry.type === 'system') color = '#6a6557';
       var label = '[' + entry.type + '] ' + esc(entry.charName || '');
       var textHtml;
-      if (entry.type === 'heart' && entry.zhText && entry.zhText.trim() && entry.zhText !== entry.text) {
+      if ((entry.type === 'heart' || entry.type === 'thinking') && entry.zhText && entry.zhText.trim() && entry.zhText !== entry.text) {
         textHtml = formatTranslatable(entry.text, entry.zhText);
       } else {
         textHtml = esc(entry.text);
@@ -1863,6 +1867,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '游戏已经结束了。胜利方：' + st.winner + '阵营。你本局的身份是' + player.role + '。\n\n' +
       '【你的角色信息】\n名字：' + player.name + '\n座位号：' + player.seat + '\n身份：' + player.role + '\n' +
       fellowWolves +
+      '\n' + buildPlayerRoster(player.id) + '\n' +
       '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
       '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
       '\n【你的本局行动历史】\n' + ownHistory + '\n' +
@@ -2030,6 +2035,32 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return text;
   }
 
+  // 构建玩家名单字符串（座位号 + 展示名 + 真实姓名 + 存活状态）
+  // excludePlayerId：若匹配某玩家 id，该行标记为"你"；传 null 则不标记
+  // userOverride：若提供（字符串），user 行用此标签替代展示名（如"你(user)"）
+  function buildPlayerRoster(excludePlayerId, userOverride) {
+    var st = werewolfState;
+    if (!st || !st.players) return '';
+    var sorted = st.players.slice().sort(function (a, b) { return a.seat - b.seat; });
+    var lines = [];
+    sorted.forEach(function (p) {
+      var display = p.name || '';
+      var real = p.realName || '';
+      var status = p.alive ? '存活' : '已出局';
+      var namePart;
+      if (excludePlayerId != null && p.id === excludePlayerId) {
+        namePart = '你';
+      } else if (userOverride && p.isUser) {
+        namePart = userOverride;
+      } else {
+        namePart = display;
+      }
+      var realPart = real ? '（真实姓名：' + real + '）' : '';
+      lines.push(p.seat + '号：' + namePart + realPart + ' — ' + status);
+    });
+    return '【本局玩家名单（座位号 + 展示名 + 真实姓名）】\n' + lines.join('\n');
+  }
+
   // 构建 polling 模式下的单 char 提示词（视野隔离 + 人格优先 + 思维链）
   async function buildCharPrompt(roche, player, context) {
     var st = werewolfState;
@@ -2066,6 +2097,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '身份：' + player.role + '\n' +
       '技能：' + getRoleSkillText(player.role) + '\n' +
       fellowWolves +
+      '\n' + buildPlayerRoster(player.id) + '\n' +
       '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
       '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
       '\n【公开事件记录（仅含公开信息，不含他人私密行动）】\n' + publicLogText + '\n' +
@@ -2087,11 +2119,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '\n【当前决策请求】\n' + context + '\n' +
       '\n【输出要求】\n' +
       '请以严格JSON格式回复，不要包含任何其他文字：\n' +
-      '{ "thinking":"<5步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>" }\n' +
+      '{ "thinking":"<5步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "thinkingZh":"<非中文母语者填中文翻译，否则留空>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>" }\n' +
       '\n【字段防混血铁律】\n' +
       '严格区分字段：thinking 只放推理，heart 只放内心独白，speech 只放说出口的话，action 只放夜间行动。绝不允许把一个字段的内容混进另一个字段。\n' +
       '\n【非中文母语者翻译规则】\n' +
-      '如果你的人设是非中文母语者，你的 speech/heart 应使用你的母语表达，并务必在 speechZh/heartZh 字段提供中文翻译。若你本就说中文，这两个字段留空。';
+      '如果你的人设是非中文母语者，你的 thinking/speech/heart 应使用你的母语表达，并务必在 thinkingZh/speechZh/heartZh 字段提供中文翻译。若你本就说中文，这三个字段留空。';
 
     var userContent = '请做出你的决策并按JSON格式回复。';
 
@@ -2145,6 +2177,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var systemContent =
       '【人格优先级宣言】\n' +
       '每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系——第二身份才是"本局游戏的玩家"。角色的说话方式（语气、措辞、节奏、情感温度）是人格的产物，游戏不能改变它。游戏胜负是次要的，首要是符合角色自身人设。绝对禁止角色为了"配合游戏需要"而改变自己的说话方式。\n\n' +
+      buildPlayerRoster(null, '你(user)') + '\n\n' +
       '【角色列表】\n' + charsInfo + '\n' +
       '【公开事件记录】\n' + publicLogText + '\n' +
       '\n【视野隔离铁律】\n' +
@@ -2163,11 +2196,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '\n【决策请求】\n' + context + '\n' +
       '\n【输出要求】\n' +
       '请为每个相关角色做出决策，以严格JSON数组格式回复：\n' +
-      '[{ "seat":<座位号>, "thinking":"<5步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>" }]\n' +
+      '[{ "seat":<座位号>, "thinking":"<5步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "thinkingZh":"<非中文母语者填中文翻译，否则留空>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>" }]\n' +
       '\n【字段防混血铁律】\n' +
       '严格区分字段：thinking 只放推理，heart 只放内心独白，speech 只放说出口的话，action 只放夜间行动。绝不允许把一个字段的内容混进另一个字段。\n' +
       '\n【非中文母语者翻译规则】\n' +
-      '如果角色人设是非中文母语者，其 speech/heart 应使用其母语表达，并务必在 speechZh/heartZh 字段提供中文翻译。若本就说中文，这两个字段留空。';
+      '如果角色人设是非中文母语者，其 thinking/speech/heart 应使用其母语表达，并务必在 thinkingZh/speechZh/heartZh 字段提供中文翻译。若本就说中文，这三个字段留空。';
 
     var userContent = '请为所有角色做出决策并按JSON数组格式回复。';
 
@@ -2232,6 +2265,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           '<textarea class="mg-speak-area" id="ww-speak-input" placeholder="请输入你的发言..."></textarea>' +
           '<div class="mg-form-actions"><button class="mg-btn mg-btn-primary" data-action="submit-speak">发言</button></div>' +
           '</div>';
+      } else if (promptType === 'wolf_channel_speak') {
+        html = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">狼人频道讨论</div>' +
+          '<div class="mg-hint">和同伴商量今晚刀谁（其他狼人能看到你的发言）</div>' +
+          '<textarea class="mg-speak-area" id="ww-wolf-speak" placeholder="说说你的想法..."></textarea>' +
+          '<div class="mg-form-actions"><button class="mg-btn mg-btn-ghost" data-action="skip-wolf-speak">跳过</button><button class="mg-btn mg-btn-primary" data-action="submit-wolf-speak">发送</button></div>' +
+          '</div>';
       } else if (promptType === 'day_vote') {
         html = '<div class="mg-action-panel">' +
           '<div class="mg-action-panel-title">投票：选择要投出局的玩家</div>' +
@@ -2254,6 +2294,23 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             var speech = input.value.trim();
             panel.innerHTML = '';
             resolve({ speech: speech });
+          };
+        }
+      } else if (promptType === 'wolf_channel_speak') {
+        var wolfSubmitBtn = panel.querySelector('[data-action="submit-wolf-speak"]');
+        var wolfSkipBtn = panel.querySelector('[data-action="skip-wolf-speak"]');
+        var wolfInput = panel.querySelector('#ww-wolf-speak');
+        if (wolfSubmitBtn && wolfInput) {
+          wolfSubmitBtn.onclick = function () {
+            var speech = wolfInput.value.trim();
+            panel.innerHTML = '';
+            resolve({ speech: speech });
+          };
+        }
+        if (wolfSkipBtn) {
+          wolfSkipBtn.onclick = function () {
+            panel.innerHTML = '';
+            resolve({ speech: '' });
           };
         }
       } else {
@@ -2341,7 +2398,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     // === 狼人阶段 ===
     if (aliveWolves.length > 0 && aliveNonWolves.length > 0) {
       if (userPlayer && userPlayer.role === '狼人' && userPlayer.alive) {
-        // user 是狼人：显示同伴 + 频道讨论 + UI
+        // user 是狼人：显示同伴 → 用户发言 → 同伴讨论 → 选目标
         var fellowWolves = st.players.filter(function (p) {
           return p.role === '狼人' && !p.isUser && p.alive;
         });
@@ -2351,10 +2408,24 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         appendGamelog(container, '[DM(狼人频道)] 你的同伴：' + fellowSeatsStr, 'private');
         rerenderPlay(container, roche);
 
-        // 狼人频道讨论：同伴给出建议
+        // 累积狼人频道发言，供后续狼人参考
+        var wolfChannelMsgs = [];
+
+        // 用户先在狼人频道发言
+        var userWolfSpeak = await waitForUserInput(container, roche, 'wolf_channel_speak', {});
+        var userSpeech = (userWolfSpeak && userWolfSpeak.speech) || '';
+        if (userSpeech) {
+          appendGamelog(container, '[狼人频道] ' + userPlayer.seat + '号(你)：' + userSpeech, 'private');
+          appendCharHistory(userPlayer.id, st.day, 'night', 'heart', '狼人频道发言：' + userSpeech);
+          wolfChannelMsgs.push(userPlayer.seat + '号(你)：' + userSpeech);
+        }
+        rerenderPlay(container, roche);
+
+        // 狼人频道讨论：同伴给出建议（看到用户发言 + 之前同伴发言）
         if (fellowWolves.length > 0) {
-          var wolfDiscussContext = '狼人频道讨论：作为狼人，你建议今晚刀谁？给出建议和理由。target填建议座位号，action填简短理由。';
           if (st.mode === 'batch') {
+            var userMsgForBatch = wolfChannelMsgs.length > 0 ? '【狼人频道已有发言】\n' + wolfChannelMsgs.join('\n') + '\n' : '';
+            var wolfDiscussContext = userMsgForBatch + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言（用你的母语，非中文母语者附 speechZh），target 填建议座位号，action 填简短行动理由。';
             try {
               var wdbp = await buildBatchPrompt(roche, wolfDiscussContext + ' 仅存活的狼人角色需要讨论。');
               var wdbr = await roche.ai.chat({ messages: wdbp.messages, temperature: 0.7 });
@@ -2365,12 +2436,14 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 wdArr.forEach(function (d) {
                   var wolf = st.players.find(function (p) { return p.seat === d.seat && p.role === '狼人' && p.alive && !p.isUser; });
                   if (wolf && d.target != null) {
-                    var reason = d.action || '';
-                    appendGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：建议杀' + d.target + '号' + (reason ? '，' + reason : ''), 'private');
-                    appendDebug('thinking', wolf.name, d.thinking || '');
+                    var wolfSpeech = d.speech || ('建议杀' + d.target + '号');
+                    var wolfSpeechZh = d.speechZh || '';
+                    appendGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：' + wolfSpeech, 'private', wolfSpeechZh);
+                    appendDebug('thinking', wolf.name, d.thinking || '', d.thinkingZh || '');
                     appendDebug('heart', wolf.name, d.heart || '', d.heartZh || '');
                     appendCharHistory(wolf.id, st.day, 'night', 'heart', d.heart || '');
                     appendCharHistory(wolf.id, st.day, 'night', 'action', '建议杀' + d.target + '号');
+                    wolfChannelMsgs.push(wolf.seat + '号(' + wolf.name + ')：' + wolfSpeech);
                   }
                 });
               }
@@ -2379,18 +2452,22 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             for (var fwi = 0; fwi < fellowWolves.length; fwi++) {
               var fwolf = fellowWolves[fwi];
               try {
-                var fwcp = await buildCharPrompt(roche, fwolf, wolfDiscussContext);
+                var priorMsgs = wolfChannelMsgs.length > 0 ? '【狼人频道已有发言】\n' + wolfChannelMsgs.join('\n') + '\n' : '';
+                var fwContext = priorMsgs + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言（用你的母语，非中文母语者附 speechZh），target 填建议座位号，action 填简短行动理由。';
+                var fwcp = await buildCharPrompt(roche, fwolf, fwContext);
                 var fwcr = await roche.ai.chat({ messages: fwcp.messages, temperature: 0.7 });
                 appendDebug('response', fwolf.name, fwcr.text);
                 var fwcd = parseJsonResponse(fwcr.text);
                 appendDebug('action', fwolf.name, JSON.stringify(fwcd));
                 if (fwcd && fwcd.target != null) {
-                  var freason = fwcd.action || '';
-                  appendGamelog(container, '[狼人频道] ' + fwolf.seat + '号(' + fwolf.name + ')：建议杀' + fwcd.target + '号' + (freason ? '，' + freason : ''), 'private');
-                  appendDebug('thinking', fwolf.name, fwcd.thinking || '');
+                  var wolfSpeech = fwcd.speech || ('建议杀' + fwcd.target + '号');
+                  var wolfSpeechZh = fwcd.speechZh || '';
+                  appendGamelog(container, '[狼人频道] ' + fwolf.seat + '号(' + fwolf.name + ')：' + wolfSpeech, 'private', wolfSpeechZh);
+                  appendDebug('thinking', fwolf.name, fwcd.thinking || '', fwcd.thinkingZh || '');
                   appendDebug('heart', fwolf.name, fwcd.heart || '', fwcd.heartZh || '');
                   appendCharHistory(fwolf.id, st.day, 'night', 'heart', fwcd.heart || '');
                   appendCharHistory(fwolf.id, st.day, 'night', 'action', '建议杀' + fwcd.target + '号');
+                  wolfChannelMsgs.push(fwolf.seat + '号(' + fwolf.name + ')：' + wolfSpeech);
                 }
               } catch (e) { appendDebug('system', fwolf.name, '讨论 error: ' + (e && e.message || e)); }
             }
@@ -2424,7 +2501,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 }
                 var wolf = st.players.find(function (p) { return p.seat === d.seat && p.role === '狼人'; });
                 if (wolf) {
-                  appendDebug('thinking', wolf.name, d.thinking || '');
+                  appendDebug('thinking', wolf.name, d.thinking || '', d.thinkingZh || '');
                   appendDebug('heart', wolf.name, d.heart || '', d.heartZh || '');
                   appendCharHistory(wolf.id, st.day, 'night', 'heart', d.heart || '');
                   appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (d.target || '?') + '号');
@@ -2433,23 +2510,28 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             }
           } catch (e) { appendDebug('system', '狼人', 'batch error: ' + (e && e.message || e)); }
         } else {
-          // polling：每只狼单独决策
+          // polling：每只狼单独决策（看到之前狼的频道发言）
+          var silentWolfMsgs = [];
           for (var wi = 0; wi < aliveWolves.length; wi++) {
             var wolf = aliveWolves[wi];
             try {
-              var cp = await buildCharPrompt(roche, wolf, '你是狼人。请选择今晚要击杀的目标（回复座位号）。你和同伴共同决定。');
+              var priorMsgs = silentWolfMsgs.length > 0 ? '【狼人频道已有发言】\n' + silentWolfMsgs.join('\n') + '\n' : '';
+              var cp = await buildCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（回复座位号）。你和同伴共同决定。');
               var cr = await roche.ai.chat({ messages: cp.messages, temperature: 0.7 });
               appendDebug('response', wolf.name, cr.text);
               var cd = parseJsonResponse(cr.text);
               appendDebug('action', wolf.name, JSON.stringify(cd));
               if (cd) {
-                appendDebug('thinking', wolf.name, cd.thinking || '');
+                appendDebug('thinking', wolf.name, cd.thinking || '', cd.thinkingZh || '');
                 appendDebug('heart', wolf.name, cd.heart || '', cd.heartZh || '');
                 appendCharHistory(wolf.id, st.day, 'night', 'heart', cd.heart || '');
                 appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (cd.target || '?') + '号');
                 if (cd.target != null) {
                   var tt = parseInt(cd.target, 10);
-                  if (!isNaN(tt)) wolfVotes[tt] = (wolfVotes[tt] || 0) + 1;
+                  if (!isNaN(tt)) {
+                    wolfVotes[tt] = (wolfVotes[tt] || 0) + 1;
+                    silentWolfMsgs.push(wolf.seat + '号(' + wolf.name + ')：建议杀' + tt + '号');
+                  }
                 }
               }
             } catch (e) { appendDebug('system', wolf.name, 'error: ' + (e && e.message || e)); }
@@ -2533,7 +2615,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                     st.witchPoisonUsed = true;
                   }
                 }
-                appendDebug('thinking', witch.name, wd.thinking || '');
+                appendDebug('thinking', witch.name, wd.thinking || '', wd.thinkingZh || '');
                 appendDebug('heart', witch.name, wd.heart || '', wd.heartZh || '');
                 appendCharHistory(witch.id, st.day, 'night', 'heart', wd.heart || '');
                 appendCharHistory(witch.id, st.day, 'night', 'action', wd.action || '');
@@ -2560,7 +2642,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                   st.witchPoisonUsed = true;
                 }
               }
-              appendDebug('thinking', witch.name, wcd.thinking || '');
+              appendDebug('thinking', witch.name, wcd.thinking || '', wcd.thinkingZh || '');
               appendDebug('heart', witch.name, wcd.heart || '', wcd.heartZh || '');
               appendCharHistory(witch.id, st.day, 'night', 'heart', wcd.heart || '');
               appendCharHistory(witch.id, st.day, 'night', 'action', wcd.action || '');
@@ -2607,7 +2689,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
               if (!sd) sd = sdArr[0];
               if (sd && sd.target != null) {
                 seerTargetSeat = parseInt(sd.target, 10);
-                appendDebug('thinking', seer.name, sd.thinking || '');
+                appendDebug('thinking', seer.name, sd.thinking || '', sd.thinkingZh || '');
                 appendDebug('heart', seer.name, sd.heart || '', sd.heartZh || '');
                 appendCharHistory(seer.id, st.day, 'night', 'heart', sd.heart || '');
               }
@@ -2622,7 +2704,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             appendDebug('action', seer.name, JSON.stringify(scd));
             if (scd && scd.target != null) {
               seerTargetSeat = parseInt(scd.target, 10);
-              appendDebug('thinking', seer.name, scd.thinking || '');
+              appendDebug('thinking', seer.name, scd.thinking || '', scd.thinkingZh || '');
               appendDebug('heart', seer.name, scd.heart || '', scd.heartZh || '');
               appendCharHistory(seer.id, st.day, 'night', 'heart', scd.heart || '');
             }
@@ -2714,7 +2796,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           appendDebug('action', player.name, JSON.stringify(sd));
           if (sd) {
             // 思维链 + 心声仅进 debugLog，不进主 gamelog
-            appendDebug('thinking', player.name, sd.thinking || '');
+            appendDebug('thinking', player.name, sd.thinking || '', sd.thinkingZh || '');
             appendDebug('heart', player.name, sd.heart || '', sd.heartZh || '');
             var speech2 = sd.speech || '(无发言)';
             var speechZh2 = sd.speechZh || '';
@@ -2768,7 +2850,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           if (validTarget) {
             votes[target] = (votes[target] || 0) + 1;
             appendGamelog(container, player.seat + '号 投 ' + target + '号', 'vote');
-            appendDebug('thinking', player.name, vd.thinking || '');
+            appendDebug('thinking', player.name, vd.thinking || '', vd.thinkingZh || '');
             appendDebug('heart', player.name, vd.heart || '', vd.heartZh || '');
             appendCharHistory(player.id, st.day, 'day_vote', 'vote', '投了' + target + '号' + (vd.heart ? '（' + vd.heart + '）' : ''));
           }
