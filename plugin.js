@@ -1997,8 +1997,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     switch (count) {
       case 6: return '6人：2狼人 + 2平民 + 2神（女巫、预言家）';
       case 7: return '7人：2狼人 + 3平民 + 2神（女巫、预言家）';
-      case 8: return '8人：3狼人 + 3平民 + 2神（女巫、预言家）';
-      case 9: return '9人：3狼人 + 3平民 + 3神（女巫、预言家、猎人）';
+      case 8: return '8人：3狼人 + 2平民 + 3神（女巫、预言家、守卫）';
+      case 9: return '9人：3狼人 + 3平民 + 3神（女巫、预言家、守卫）';
       default: return '';
     }
   }
@@ -2008,8 +2008,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     switch (count) {
       case 6: return ["狼人", "狼人", "平民", "平民", "女巫", "预言家"];
       case 7: return ["狼人", "狼人", "平民", "平民", "平民", "女巫", "预言家"];
-      case 8: return ["狼人", "狼人", "狼人", "平民", "平民", "平民", "女巫", "预言家"];
-      case 9: return ["狼人", "狼人", "狼人", "平民", "平民", "平民", "女巫", "预言家", "猎人"];
+      case 8: return ["狼人", "狼人", "狼人", "平民", "平民", "女巫", "预言家", "守卫"];
+      case 9: return ["狼人", "狼人", "狼人", "平民", "平民", "平民", "女巫", "预言家", "守卫"];
       default: return ["狼人", "狼人", "平民", "平民", "女巫", "预言家"];
     }
   }
@@ -2021,6 +2021,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       case '平民': return '无技能，靠白天发言推理';
       case '女巫': return '拥有一瓶解药和一瓶毒药';
       case '预言家': return '夜晚查验一人身份';
+      case '守卫': return '每晚守护一人不被狼人杀害，不能连续两晚守护同一人';
       case '猎人': return '出局时可开枪带走一人';
       default: return '';
     }
@@ -2352,6 +2353,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
           }).join('') +
           '</div></div>';
+      } else if (promptType === 'guard_protect') {
+        html = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">守卫守护</div>' +
+          '<div class="mg-hint">选择今晚要守护的玩家（不能连守昨晚的人）</div>' +
+          '<div class="mg-target-btns">' +
+          options.targets.map(function (seat) {
+            return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
+          }).join('') +
+          '</div></div>';
       } else if (promptType === 'day_speak') {
         html = '<div class="mg-action-panel">' +
           '<div class="mg-action-panel-title">' + options.seat + '号发言</div>' +
@@ -2503,7 +2513,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       witchSave: false,
       witchPoisonTarget: null,
       seerCheckTarget: null,
-      seerResult: null
+      seerResult: null,
+      guardTarget: null
     };
     // 夜晚初始化完成，保存存档（fire-and-forget）
     saveWerewolfState(roche);
@@ -2522,6 +2533,81 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         appendGamelog(container, '游戏结束！' + st.winner + '阵营胜利！', 'dm');
       }
       return;
+    }
+
+    // === 守卫阶段 ===
+    var guard = st.players.find(function (p) { return p.alive && p.role === '守卫'; });
+    if (guard) {
+      if (userPlayer && userPlayer.role === '守卫' && userPlayer.alive) {
+        // user 是守卫：选择守护目标（不能连守昨晚的人）
+        var guardTargets = st.players.filter(function (p) {
+          return p.alive && (st.lastGuardTarget == null || p.seat !== st.lastGuardTarget);
+        }).map(function (p) { return p.seat; });
+        var guardResult = await waitForUserInput(container, roche, 'guard_protect', { targets: guardTargets });
+        if (guardResult && guardResult.seat) {
+          st.nightActions.guardTarget = guardResult.seat;
+          appendCharHistory(userPlayer.id, st.day, 'night', 'action', '守护' + guardResult.seat + '号');
+          appendGamelog(container, '[DM(私窗)] 你守护了' + guardResult.seat + '号', 'private');
+        }
+      } else {
+        // 静默结算
+        var guardAliveSeats = st.players.filter(function (p) { return p.alive; }).map(function (p) { return p.seat; });
+        var guardContext = '你是守卫。请选择今晚要守护的玩家（不能连续两晚守护同一人）。可选目标：' + guardAliveSeats.join(', ');
+        if (st.lastGuardTarget != null) {
+          guardContext += '。注意：你上一晚守护了' + st.lastGuardTarget + '号，今晚不能再守他。';
+        }
+
+        var guardTargetSeat = null;
+        if (st.mode === 'batch') {
+          try {
+            var gbp = await buildBatchPrompt(roche, guardContext + ' 仅守卫角色需要行动。');
+            var gbr = await roche.ai.chat({ messages: gbp.messages, temperature: 0.7 });
+            appendDebug('response', '批量', gbr.text);
+            var gdArr = parseJsonResponse(gbr.text);
+            appendDebug('action', '批量', JSON.stringify(gdArr, null, 2));
+            if (Array.isArray(gdArr) && gdArr.length > 0) {
+              var gd = gdArr.find(function (d) { return d.seat === guard.seat; });
+              if (!gd) gd = gdArr[0];
+              if (gd && gd.target != null) {
+                var gdt = parseInt(gd.target, 10);
+                var gdtValid = st.players.find(function (p) { return p.seat === gdt && p.alive; });
+                if (gdtValid && (st.lastGuardTarget == null || gdt !== st.lastGuardTarget)) {
+                  guardTargetSeat = gdt;
+                }
+                appendDebug('thinking', guard.name, gd.thinking || '');
+                appendDebug('heart', guard.name, gd.heart || '', gd.heartZh || '');
+                appendCharHistory(guard.id, st.day, 'night', 'heart', gd.heart || '');
+                appendCharHistory(guard.id, st.day, 'night', 'action', gd.action || '');
+              }
+            }
+          } catch (e) { appendDebug('system', '守卫', 'batch error: ' + (e && e.message || e)); }
+        } else {
+          try {
+            var gcp = await buildCharPrompt(roche, guard, guardContext);
+            var gcr = await roche.ai.chat({ messages: gcp.messages, temperature: 0.7 });
+            appendDebug('response', guard.name, gcr.text);
+            var gcd = parseJsonResponse(gcr.text);
+            appendDebug('action', guard.name, JSON.stringify(gcd, null, 2));
+            if (gcd) {
+              appendDebug('thinking', guard.name, gcd.thinking || '');
+              appendDebug('heart', guard.name, gcd.heart || '', gcd.heartZh || '');
+              appendCharHistory(guard.id, st.day, 'night', 'heart', gcd.heart || '');
+              appendCharHistory(guard.id, st.day, 'night', 'action', gcd.action || '');
+              if (gcd.target != null) {
+                var gtt = parseInt(gcd.target, 10);
+                var gttValid = st.players.find(function (p) { return p.seat === gtt && p.alive; });
+                if (gttValid && (st.lastGuardTarget == null || gtt !== st.lastGuardTarget)) {
+                  guardTargetSeat = gtt;
+                }
+              }
+            }
+          } catch (e) { appendDebug('system', guard.name, 'error: ' + (e && e.message || e)); }
+        }
+
+        if (guardTargetSeat != null) {
+          st.nightActions.guardTarget = guardTargetSeat;
+        }
+      }
     }
 
     // === 狼人阶段 ===
@@ -2854,8 +2940,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
 
     // === 结算死亡 ===
-    // 狼刀（除非女巫救）
-    if (st.nightActions.wolvesTarget != null && !st.nightActions.witchSave) {
+    // 狼刀：守卫守护 XOR 女巫救药 → 存活；同守同救（两者同时生效）→ 死
+    var guarded = (st.nightActions.guardTarget != null && st.nightActions.guardTarget === st.nightActions.wolvesTarget);
+    var saved = st.nightActions.witchSave;
+    var wolfKillHappens = st.nightActions.wolvesTarget != null && ((!guarded && !saved) || (guarded && saved));
+    if (wolfKillHappens) {
       var vP = st.players.find(function (p) { return p.seat === st.nightActions.wolvesTarget; });
       if (vP && vP.alive) {
         vP.alive = false;
@@ -2870,6 +2959,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         st.pendingDeaths.push(pP.seat);
       }
     }
+
+    // 记录今晚守护目标，供下一晚连守判定
+    st.lastGuardTarget = st.nightActions.guardTarget || null;
 
     rerenderPlay(container, roche);
 
