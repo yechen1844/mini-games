@@ -871,12 +871,14 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return div.innerHTML;
   }
 
-  // 转义 HTML（保留真实换行，用于 <pre> 等需要换行渲染的场景）
-  function escPre(text) {
+  // 转义 HTML 并将真实换行转为 <br>，用于调试日志多行渲染（不再依赖 <pre>/white-space）
+  function debugEscape(text) {
     return String(text == null ? '' : text)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/\r\n/g, '\n')
+      .replace(/\n/g, '<br>');
   }
 
   // 注入桥接脚本到游戏 HTML
@@ -1746,7 +1748,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 渲染调试日志面板内容
-  // 使用 escPre 手动转义以保留真实换行，使 <pre white-space:pre-wrap> 能正确渲染多行 JSON
+  // 使用 debugEscape 转义并将真实换行转为 <br>，多行 JSON 可靠换行（不依赖 <pre>/white-space）
   function renderDebugPanelContent(container) {
     var st = werewolfState;
     if (!st || !st.debugLog) return;
@@ -1761,19 +1763,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       else if (entry.type === 'heart') color = '#b57fa0';
       else if (entry.type === 'action') color = '#c9a961';
       else if (entry.type === 'system') color = '#6a6557';
-      var label = '[' + entry.type + '] ' + escPre(entry.charName || '');
+      var label = '[' + entry.type + '] ' + debugEscape(entry.charName || '');
       var textHtml;
       if (entry.type === 'heart' && entry.zhText && entry.zhText.trim() && entry.zhText !== entry.text) {
-        // 心声带翻译：内联 formatTranslatable 的逻辑但使用 escPre 以保留换行
+        // 心声带翻译：内联 formatTranslatable 的逻辑但使用 debugEscape 以保留换行
         var id = 'tr-' + Math.random().toString(36).slice(2, 8);
-        textHtml = escPre(entry.text) + ' <span class="mg-trans-toggle" data-tr="' + id + '" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-left:6px;letter-spacing:0.05em;">译</span>' +
-          '<span class="mg-trans-zh" id="' + id + '" style="display:none;color:#9a8f7a;margin-left:6px;font-style:italic;">（' + escPre(entry.zhText) + '）</span>';
+        textHtml = debugEscape(entry.text) + ' <span class="mg-trans-toggle" data-tr="' + id + '" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-left:6px;letter-spacing:0.05em;">译</span>' +
+          '<span class="mg-trans-zh" id="' + id + '" style="display:none;color:#9a8f7a;margin-left:6px;font-style:italic;">（' + debugEscape(entry.zhText) + '）</span>';
       } else {
-        textHtml = '<span>' + escPre(entry.text) + '</span>';
+        textHtml = '<span>' + debugEscape(entry.text) + '</span>';
       }
       html += '<div style="margin:6px 0;padding:6px 0;border-bottom:1px solid rgba(201,169,97,0.12);">' +
         '<div style="color:' + color + ';font-size:11px;font-weight:600;letter-spacing:0.03em;">' + label + '</div>' +
-        '<pre style="margin:3px 0 0;white-space:pre-wrap;word-break:break-word;font-family:\'Cascadia Code\',\'Fira Code\',monospace;font-size:11px;color:#9a8f7a;line-height:1.5;">' + textHtml + '</pre>' +
+        '<div style="margin:3px 0 0;word-break:break-word;font-family:\'Cascadia Code\',\'Fira Code\',monospace;font-size:11px;color:#9a8f7a;line-height:1.5;">' + textHtml + '</div>' +
         '</div>';
     });
     contentEl.innerHTML = html;
@@ -2371,8 +2373,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   // 等待用户输入（基于 promptType 渲染不同的交互面板）
   function waitForUserInput(container, roche, promptType, options) {
     return new Promise(function (resolve) {
+      // 防御：取消上一个尚未完成的用户输入等待，避免旧面板残留 / 旧 Promise 永不 resolve
+      // 例如多次进入游戏循环或恢复存档时可能出现 waitForUserInput 重叠
+      if (werewolfState && werewolfState._pendingResolve) {
+        var prev = werewolfState._pendingResolve;
+        werewolfState._pendingResolve = null;
+        prev(null);
+      }
       var panel = container.querySelector('#ww-action-panel');
       if (!panel) { resolve(null); return; }
+      if (werewolfState) werewolfState._pendingResolve = resolve;
 
       // 等待用户输入前保存存档（fire-and-forget），便于中途退出后恢复
       saveWerewolfState(roche);
@@ -2457,6 +2467,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           submitBtn.onclick = function () {
             var speech = input.value.trim();
             panel.innerHTML = '';
+            if (werewolfState) werewolfState._pendingResolve = null;
             resolve({ speech: speech });
           };
         }
@@ -2468,12 +2479,14 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           wolfSubmitBtn.onclick = function () {
             var speech = wolfInput.value.trim();
             panel.innerHTML = '';
+            if (werewolfState) werewolfState._pendingResolve = null;
             resolve({ speech: speech });
           };
         }
         if (wolfSkipBtn) {
           wolfSkipBtn.onclick = function () {
             panel.innerHTML = '';
+            if (werewolfState) werewolfState._pendingResolve = null;
             resolve({ speech: '' });
           };
         }
@@ -2483,6 +2496,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           btn.onclick = function () {
             var seat = parseInt(btn.dataset.seat, 10);
             panel.innerHTML = '';
+            if (werewolfState) werewolfState._pendingResolve = null;
             resolve({ seat: seat });
           };
         });
@@ -2491,6 +2505,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           btn.onclick = function () {
             var action = btn.dataset.action;
             panel.innerHTML = '';
+            if (werewolfState) werewolfState._pendingResolve = null;
             resolve({ action: action });
           };
         });
@@ -2797,8 +2812,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var canPoison = !st.witchPoisonUsed;
 
       if (userPlayer && userPlayer.role === '女巫' && userPlayer.alive) {
-        // user 是女巫
-        if (victim != null || canPoison) {
+        // user 是女巫；规则：每晚最多使用一瓶药（解药或毒药，不可兼用）
+        var usedPotionThisNight = false;
+        if (canSave && victim != null) {
           var saveResult = await waitForUserInput(container, roche, 'witch_save', {
             victim: victim,
             canSave: canSave
@@ -2807,17 +2823,18 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             st.nightActions.witchSave = true;
             st.witchSaveUsed = true;
             appendCharHistory(userPlayer.id, st.day, 'night', 'action', '使用解药救了' + victim + '号');
+            usedPotionThisNight = true;
           }
-          if (canPoison) {
-            var poisonTargets = st.players.filter(function (p) {
-              return p.alive && !p.isUser;
-            }).map(function (p) { return p.seat; });
-            var poisonResult = await waitForUserInput(container, roche, 'witch_poison', { targets: poisonTargets });
-            if (poisonResult && poisonResult.seat) {
-              st.nightActions.witchPoisonTarget = poisonResult.seat;
-              st.witchPoisonUsed = true;
-              appendCharHistory(userPlayer.id, st.day, 'night', 'action', '使用毒药毒了' + poisonResult.seat + '号');
-            }
+        }
+        if (canPoison && !usedPotionThisNight) {
+          var poisonTargets = st.players.filter(function (p) {
+            return p.alive && !p.isUser;
+          }).map(function (p) { return p.seat; });
+          var poisonResult = await waitForUserInput(container, roche, 'witch_poison', { targets: poisonTargets });
+          if (poisonResult && poisonResult.seat) {
+            st.nightActions.witchPoisonTarget = poisonResult.seat;
+            st.witchPoisonUsed = true;
+            appendCharHistory(userPlayer.id, st.day, 'night', 'action', '使用毒药毒了' + poisonResult.seat + '号');
           }
         }
       } else {
@@ -2843,11 +2860,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
               var wd = wdArr.find(function (d) { return d.seat === witch.seat; });
               if (!wd) wd = wdArr[0];
               if (wd) {
+                var usedPotionAI = false;
                 if (wd.action && wd.action.indexOf('解药') !== -1 && canSave && victim != null) {
                   st.nightActions.witchSave = true;
                   st.witchSaveUsed = true;
+                  usedPotionAI = true;
                 }
-                if (wd.target != null && canPoison && wd.action && wd.action.indexOf('毒') !== -1) {
+                if (!usedPotionAI && wd.target != null && canPoison && wd.action && wd.action.indexOf('毒') !== -1) {
                   var pt = parseInt(wd.target, 10);
                   var ptValid = st.players.find(function (p) { return p.seat === pt && p.alive && p.id !== witch.id; });
                   if (ptValid) {
@@ -2870,11 +2889,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             var wcd = parseJsonResponse(wcr.text);
             appendDebug('action', witch.name, JSON.stringify(wcd, null, 2));
             if (wcd) {
+              var usedPotionAI2 = false;
               if (wcd.action && wcd.action.indexOf('解药') !== -1 && canSave && victim != null) {
                 st.nightActions.witchSave = true;
                 st.witchSaveUsed = true;
+                usedPotionAI2 = true;
               }
-              if (wcd.target != null && canPoison && wcd.action && wcd.action.indexOf('毒') !== -1) {
+              if (!usedPotionAI2 && wcd.target != null && canPoison && wcd.action && wcd.action.indexOf('毒') !== -1) {
                 var pt2 = parseInt(wcd.target, 10);
                 var pt2Valid = st.players.find(function (p) { return p.seat === pt2 && p.alive && p.id !== witch.id; });
                 if (pt2Valid) {
@@ -2984,6 +3005,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         st.pendingDeaths.push(pP.seat);
       }
     }
+
+    // 死亡结算日志（便于在系统日志面板核对毒/救/守是否生效）
+    appendDebug('system', 'death', '夜刀目标:' + (st.nightActions.wolvesTarget != null ? st.nightActions.wolvesTarget : '无') +
+      ' 守卫:' + (st.nightActions.guardTarget != null ? st.nightActions.guardTarget : '无') +
+      ' 救:' + (st.nightActions.witchSave ? '是' : '否') +
+      ' 毒:' + (st.nightActions.witchPoisonTarget != null ? st.nightActions.witchPoisonTarget : '无') +
+      ' 死亡:' + (st.pendingDeaths.length > 0 ? st.pendingDeaths.join(',') : '无'));
 
     // 记录今晚守护目标，供下一晚连守判定
     st.lastGuardTarget = st.nightActions.guardTarget || null;
