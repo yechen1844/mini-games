@@ -871,6 +871,14 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return div.innerHTML;
   }
 
+  // 转义 HTML（保留真实换行，用于 <pre> 等需要换行渲染的场景）
+  function escPre(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
   // 注入桥接脚本到游戏 HTML
   function prepareGameHtml(html) {
     var bridge = GAME_BRIDGE;
@@ -1515,8 +1523,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       fellowWolvesLine +
       '<div class="mg-role-skill">' + esc(skillText) + '</div>' +
       '</div>' +
-      '<div class="mg-phase-label">' + esc(phaseLabel) + '</div>' +
-      '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      '<div class="mg-phase-label" id="ww-phase-label">' + esc(phaseLabel) + '</div>' +
+      '<div class="mg-seats-grid" id="ww-seats-grid">' + seatsHtml + '</div>' +
       '<div class="mg-gamelog" id="ww-gamelog">' + logHtml + '</div>' +
       '<div id="ww-action-panel"></div>' +
       '<div class="mg-form-actions">' + buttonHtml + '</div>' +
@@ -1535,9 +1543,22 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     container.innerHTML = html;
 
-    // 滚动到底部
+    // 恢复 gamelog 滚动位置（若有保存），否则滚到底部
     var logEl = container.querySelector('#ww-gamelog');
-    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+    if (logEl) {
+      if (st._gamelogScroll != null) {
+        logEl.scrollTop = st._gamelogScroll;
+      } else {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      // 监听滚动以保存位置（标记位避免重复绑定）
+      if (!logEl._wwScrollBound) {
+        logEl.addEventListener('scroll', function () {
+          if (werewolfState) werewolfState._gamelogScroll = logEl.scrollTop;
+        });
+        logEl._wwScrollBound = true;
+      }
+    }
 
     // 返回大厅（需确认）
     container.querySelector('[data-action="back"]').onclick = async function () {
@@ -1601,8 +1622,39 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 重新渲染 play 屏幕（不重置状态）
+  // 仅增量更新座位网格与阶段标签，不重建 gamelog，避免滚动位置丢失
   function rerenderPlay(container, roche) {
-    renderWerewolfPlay(container, roche);
+    var st = werewolfState;
+    if (!st) return;
+
+    var seatsGridEl = container.querySelector('#ww-seats-grid');
+    if (seatsGridEl) {
+      var seatsHtml = '';
+      st.players.forEach(function (p) {
+        var cls = 'mg-seat-card';
+        if (!p.alive) cls += ' dead';
+        if (p.isUser) cls += ' is-user';
+        var status = p.alive ? '存活' : '已出局';
+        seatsHtml +=
+          '<div class="' + cls + '">' +
+          '<div class="mg-seat-num">' + p.seat + '号</div>' +
+          '<div class="mg-seat-name">' + esc(p.name) + '</div>' +
+          '<div class="mg-seat-status">' + status + '</div>' +
+          '</div>';
+      });
+      seatsGridEl.innerHTML = seatsHtml;
+    }
+
+    var phaseLabelEl = container.querySelector('#ww-phase-label');
+    if (phaseLabelEl) {
+      var phaseName = '';
+      if (st.subPhase === 'night') phaseName = '夜晚';
+      else if (st.subPhase === 'day_speak') phaseName = '白天发言';
+      else if (st.subPhase === 'day_vote') phaseName = '投票';
+      var phaseLabel = '当前：第' + st.day + '天' + (phaseName ? ' ' + phaseName : ' 准备中');
+      phaseLabelEl.textContent = phaseLabel;
+    }
+    // 不重建 gamelog；appendGamelog 已增量更新
   }
 
   // 向 gamelog 追加一行：写入 gamelogLines + DOM；非 heart/private 也写入 publicLog
@@ -1616,6 +1668,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
     var logEl = container.querySelector('#ww-gamelog');
     if (logEl) {
+      // 仅当用户已在底部附近时才自动滚动，否则保留其滚动位置
+      var wasNearBottom = (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight) < 80;
       var div = document.createElement('div');
       div.className = 'mg-gamelog-line ' + (cls === 'private' ? 'dm' : (cls || 'msg'));
       if (zhText && zhText.trim() && zhText !== text) {
@@ -1624,7 +1678,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         div.textContent = text;
       }
       logEl.appendChild(div);
-      logEl.scrollTop = logEl.scrollHeight;
+      if (wasNearBottom) logEl.scrollTop = logEl.scrollHeight;
     }
   }
 
@@ -1651,6 +1705,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var s = await roche.storage.get('ww-save');
       if (s) {
         werewolfState = JSON.parse(s);
+        // 设置恢复阶段标记，供各 run 函数跳过重复公告；清除旧标记
+        werewolfState._resumePhase = werewolfState.subPhase || null;
+        werewolfState._savedAfterPhase = null;
         return true;
       }
     } catch (e) { /* 忽略 */ }
@@ -1689,6 +1746,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 渲染调试日志面板内容
+  // 使用 escPre 手动转义以保留真实换行，使 <pre white-space:pre-wrap> 能正确渲染多行 JSON
   function renderDebugPanelContent(container) {
     var st = werewolfState;
     if (!st || !st.debugLog) return;
@@ -1703,12 +1761,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       else if (entry.type === 'heart') color = '#b57fa0';
       else if (entry.type === 'action') color = '#c9a961';
       else if (entry.type === 'system') color = '#6a6557';
-      var label = '[' + entry.type + '] ' + esc(entry.charName || '');
+      var label = '[' + entry.type + '] ' + escPre(entry.charName || '');
       var textHtml;
       if (entry.type === 'heart' && entry.zhText && entry.zhText.trim() && entry.zhText !== entry.text) {
-        textHtml = formatTranslatable(entry.text, entry.zhText);
+        // 心声带翻译：内联 formatTranslatable 的逻辑但使用 escPre 以保留换行
+        var id = 'tr-' + Math.random().toString(36).slice(2, 8);
+        textHtml = escPre(entry.text) + ' <span class="mg-trans-toggle" data-tr="' + id + '" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-left:6px;letter-spacing:0.05em;">译</span>' +
+          '<span class="mg-trans-zh" id="' + id + '" style="display:none;color:#9a8f7a;margin-left:6px;font-style:italic;">（' + escPre(entry.zhText) + '）</span>';
       } else {
-        textHtml = esc(entry.text);
+        textHtml = '<span>' + escPre(entry.text) + '</span>';
       }
       html += '<div style="margin:6px 0;padding:6px 0;border-bottom:1px solid rgba(201,169,97,0.12);">' +
         '<div style="color:' + color + ';font-size:11px;font-weight:600;letter-spacing:0.03em;">' + label + '</div>' +
@@ -2438,60 +2499,23 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 主游戏循环
-  // 恢复语义：若 _savedAfterPhase 标记某阶段已完成，则跳过该阶段；若 subPhase 已是后续阶段，则跳过夜晚/白天发言。
+  // 简洁稳健的阶段推进：夜晚 → 白天发言 → 投票 → 循环。
+  // 不再依赖旧的阶段完成标记跳过逻辑；恢复语义由各 run 函数顶部的 _resumePhase 检查处理。
   async function startGameLoop(container, roche) {
     try {
       while (werewolfState && !werewolfState.gameOver) {
-        var sp = werewolfState.subPhase;
-        var done = werewolfState._savedAfterPhase;
-        // 跳过已完成的阶段（一次性恢复标记，用后即清）
-        var skipNight = (sp === 'day_speak' || sp === 'day_vote' || (sp === 'night' && done === 'night'));
-        var skipSpeak = (sp === 'day_vote' || (sp === 'day_speak' && done === 'day_speak'));
-        var skipVote = (sp === 'day_vote' && done === 'day_vote');
-        if (done) werewolfState._savedAfterPhase = null;
-
-        if (!skipNight) {
-          try {
-            await runNight(container, roche);
-          } catch (e) {
-            appendDebug('system', 'loop', 'runNight 异常: ' + (e && e.message || String(e)));
-          }
-        }
+        // 夜晚
+        await runNight(container, roche);
         if (!werewolfState || werewolfState.gameOver) break;
-
-        // 重新读取（runNight 可能改变 subPhase）
-        sp = werewolfState.subPhase;
-        done = werewolfState._savedAfterPhase;
-        skipSpeak = (sp === 'day_vote' || (sp === 'day_speak' && done === 'day_speak'));
-        if (done) werewolfState._savedAfterPhase = null;
-
-        if (!skipSpeak) {
-          try {
-            await runDaySpeak(container, roche);
-          } catch (e) {
-            appendDebug('system', 'loop', 'runDaySpeak 异常: ' + (e && e.message || String(e)));
-          }
-        }
+        // 白天发言
+        await runDaySpeak(container, roche);
         if (!werewolfState || werewolfState.gameOver) break;
-
-        // 重新读取
-        sp = werewolfState.subPhase;
-        done = werewolfState._savedAfterPhase;
-        skipVote = (sp === 'day_vote' && done === 'day_vote');
-        if (done) werewolfState._savedAfterPhase = null;
-
-        if (!skipVote) {
-          try {
-            await runDayVote(container, roche);
-          } catch (e) {
-            appendDebug('system', 'loop', 'runDayVote 异常: ' + (e && e.message || String(e)));
-          }
-        } else {
-          // 投票已完成，重置 subPhase 以便下一轮从夜晚开始
-          werewolfState.subPhase = null;
-        }
+        // 投票
+        await runDayVote(container, roche);
         if (!werewolfState || werewolfState.gameOver) break;
       }
+    } catch (e) {
+      appendDebug('system', 'loop', '游戏循环异常: ' + (e && e.message || String(e)));
     } finally {
       if (werewolfState) werewolfState.gameLoopRunning = false;
       if (werewolfState && werewolfState.gameOver) {
@@ -2506,7 +2530,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     // 恢复时 subPhase 已是 'night'，不重复递增天数
     if (st.subPhase !== 'night') st.day++;
     st.subPhase = 'night';
-    st._savedAfterPhase = null;
     st.pendingDeaths = [];
     st.nightActions = {
       wolvesTarget: null,
@@ -2519,7 +2542,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     // 夜晚初始化完成，保存存档（fire-and-forget）
     saveWerewolfState(roche);
 
-    appendGamelog(container, '天黑请闭眼。', 'dm');
+    // 恢复时跳过"天黑请闭眼"公告
+    if (st._resumePhase === 'night') {
+      st._resumePhase = null;
+    } else {
+      appendGamelog(container, '天黑请闭眼。', 'dm');
+    }
     rerenderPlay(container, roche);
     await sleep(400);
 
@@ -2621,7 +2649,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           ? fellowWolves.map(function (p) { return p.seat + '号'; }).join('、')
           : '（无）';
         appendGamelog(container, '[DM(狼人频道)] 你的同伴：' + fellowSeatsStr, 'private');
-        rerenderPlay(container, roche);
 
         // 累积狼人频道发言，供后续狼人参考
         var wolfChannelMsgs = [];
@@ -2634,7 +2661,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           appendCharHistory(userPlayer.id, st.day, 'night', 'heart', '狼人频道发言：' + userSpeech);
           wolfChannelMsgs.push(userPlayer.seat + '号(你)：' + userSpeech);
         }
-        rerenderPlay(container, roche);
 
         // 狼人频道讨论：同伴给出建议（看到用户发言 + 之前同伴发言）
         if (fellowWolves.length > 0) {
@@ -2687,7 +2713,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
               } catch (e) { appendDebug('system', fwolf.name, '讨论 error: ' + (e && e.message || e)); }
             }
           }
-          rerenderPlay(container, roche);
           await sleep(400);
         }
 
@@ -2970,18 +2995,17 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       appendGamelog(container, '游戏结束！' + st.winner + '阵营胜利！', 'dm');
       return;
     }
-    // 夜晚结束，标记完成并保存存档
-    st._savedAfterPhase = 'night';
+    // 夜晚结束，保存存档
     saveWerewolfState(roche);
   }
 
   // 白天发言流程
   async function runDaySpeak(container, roche) {
     var st = werewolfState;
-    // 恢复时 subPhase 已是 'day_speak'，跳过开场公告并从 speakIndex 继续
-    var resuming = (st.subPhase === 'day_speak');
+    // 恢复时 _resumePhase 为 'day_speak'，跳过开场公告并从 speakIndex 继续
+    var resuming = (st._resumePhase === 'day_speak');
+    if (resuming) st._resumePhase = null;
     st.subPhase = 'day_speak';
-    st._savedAfterPhase = null;
 
     if (!resuming) {
       st.speakIndex = 1;
@@ -3013,7 +3037,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var speech = (speakResult && speakResult.speech) || '(无发言)';
         appendGamelog(container, seat + '号(' + player.name + ')：' + speech, 'msg');
         appendCharHistory(player.id, st.day, 'day_speak', 'speech', speech);
-        rerenderPlay(container, roche);
       } else {
         // AI char 发言（batch 和 polling 都逐个调用，保证视野隔离）
         var speakContext = '现在是白天发言环节。请基于你的身份、人设、记忆和场上公开信息进行发言。发言要符合你的角色人格，不要使用游戏套话。请在speech字段给出你的发言内容。';
@@ -3039,12 +3062,10 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           appendDebug('system', player.name, '发言 error: ' + (e && e.message || e));
           appendGamelog(container, seat + '号(' + player.name + ')：(发言异常)', 'msg');
         }
-        rerenderPlay(container, roche);
         await sleep(300);
       }
     }
-    // 白天发言结束，标记完成并保存存档
-    st._savedAfterPhase = 'day_speak';
+    // 白天发言结束，保存存档
     saveWerewolfState(roche);
   }
 
@@ -3052,9 +3073,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   async function runDayVote(container, roche) {
     var st = werewolfState;
     st.subPhase = 'day_vote';
-    st._savedAfterPhase = null;
 
-    appendGamelog(container, '投票阶段开始。', 'dm');
+    // 恢复时跳过"投票阶段开始"公告
+    if (st._resumePhase === 'day_vote') {
+      st._resumePhase = null;
+    } else {
+      appendGamelog(container, '投票阶段开始。', 'dm');
+    }
     rerenderPlay(container, roche);
     await sleep(300);
 
@@ -3089,7 +3114,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           }
         }
       } catch (e) { appendDebug('system', player.name, '投票 error: ' + (e && e.message || e)); }
-      rerenderPlay(container, roche);
     }
 
     // user 投票
@@ -3106,7 +3130,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       } else {
         appendGamelog(container, userPlayer.seat + '号弃票', 'vote');
       }
-      rerenderPlay(container, roche);
     }
 
     // 统计票数
@@ -3136,9 +3159,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     await sleep(500);
 
     checkGameOver(roche);
-    // 投票结束，标记完成并保存存档
+    // 投票结束，保存存档
     if (werewolfState && !werewolfState.gameOver) {
-      werewolfState._savedAfterPhase = 'day_vote';
       saveWerewolfState(roche);
     }
   }
