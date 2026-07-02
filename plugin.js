@@ -11,7 +11,7 @@
  *
  * 如何添加新的内置游戏：
  *   在 BUILTIN_GAMES 数组中添加一个对象即可：
- *   { id: "builtin-xxx", name: "游戏名", description: "简介", emoji: "🎮", html: "<!DOCTYPE html>..." }
+ *   { id: "builtin-xxx", name: "游戏名", description: "简介", emoji: "", html: "<!DOCTYPE html>..." }
  *
  * 如何在游戏中使用 AI 桥接：
  *   游戏 HTML 中可直接调用 window.RocheGame.aiChat(messages) 等方法
@@ -38,14 +38,14 @@
       id: "builtin-turtle-soup",
       name: "海龟汤",
       description: "即将推出",
-      emoji: "🐢",
+      emoji: "",
       isPlaceholder: true
     },
     {
       id: "builtin-werewolf",
       name: "狼人杀",
       description: "人设与记忆驱动的狼人杀",
-      emoji: "🐺",
+      emoji: "",
       isNative: true
     }
   ];
@@ -93,124 +93,235 @@
    * CSS 样式（全部限定在 .mini-games-root 下）
    * ============================================================ */
   var CSS = `
+/* ============================================================
+ * 小游戏插件样式 · 午夜剧场
+ * 深色学术 / 古典典雅 / 金色点缀
+ * ============================================================ */
+
 .mini-games-root {
+  --mg-bg-deep: #0a0a14;
+  --mg-bg-mid: #0d0d1a;
+  --mg-surface: #13131f;
+  --mg-surface-2: #181828;
+  --mg-border: #2a2a40;
+  --mg-border-gold: #3a3520;
+  --mg-gold: #c9a961;
+  --mg-gold-bright: #d4af37;
+  --mg-wine: #7a2e3a;
+  --mg-wine-bright: #8b3a4a;
+  --mg-text: #e8e4d8;
+  --mg-text-muted: #8a8578;
+  --mg-text-dim: #6a6558;
+  --mg-divider: #2a2a3a;
+  --mg-serif: "Georgia", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --mg-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+
   height: 100%;
-  background: #0a0a1a;
-  color: #e0e0e0;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background:
+    radial-gradient(ellipse at top, rgba(58, 53, 32, 0.14) 0%, transparent 55%),
+    radial-gradient(ellipse at bottom, rgba(122, 46, 58, 0.10) 0%, transparent 60%),
+    linear-gradient(180deg, #0a0a14 0%, #0d0d1a 100%);
+  color: var(--mg-text);
+  font-family: var(--mg-sans);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   font-size: 14px;
+  line-height: 1.55;
 }
+
+/* ---------- 滚动条 ---------- */
+.mini-games-root ::-webkit-scrollbar { width: 6px; height: 6px; }
+.mini-games-root ::-webkit-scrollbar-track { background: transparent; }
+.mini-games-root ::-webkit-scrollbar-thumb {
+  background: rgba(201, 169, 97, 0.20);
+  border-radius: 2px;
+}
+.mini-games-root ::-webkit-scrollbar-thumb:hover { background: rgba(201, 169, 97, 0.36); }
 
 /* ---------- Header ---------- */
 .mg-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 20px;
-  background: #111128;
-  border-bottom: 1px solid #1f1f3a;
+  padding: 16px 28px;
+  background: linear-gradient(180deg, rgba(19, 19, 31, 0.92) 0%, rgba(13, 13, 26, 0.6) 100%);
+  border-bottom: 1px solid var(--mg-border);
+  position: relative;
   flex-shrink: 0;
 }
+.mg-header::after {
+  content: "";
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(201, 169, 97, 0.5) 50%, transparent 100%);
+}
 .mg-title {
-  font-size: 20px;
-  font-weight: 700;
+  font-family: var(--mg-serif);
+  font-size: 22px;
+  font-weight: 600;
   margin: 0;
+  color: var(--mg-gold);
+  letter-spacing: 0.06em;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  text-shadow: 0 0 18px rgba(201, 169, 97, 0.18);
 }
-.mg-actions { display: flex; gap: 8px; align-items: center; }
+.mg-actions { display: flex; gap: 10px; align-items: center; }
 
 /* ---------- Buttons ---------- */
 .mg-btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 8px;
+  padding: 8px 18px;
+  border: 1px solid var(--mg-border);
+  border-radius: 2px;
+  background: var(--mg-surface);
+  color: var(--mg-text);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  transition: all 0.2s;
-  font-family: inherit;
+  font-family: var(--mg-sans);
+  letter-spacing: 0.04em;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
-.mg-btn-primary { background: #6c5ce7; color: #fff; }
-.mg-btn-primary:hover { background: #5a4bd1; }
+.mg-btn:hover {
+  background: var(--mg-surface-2);
+  border-color: var(--mg-gold);
+  color: var(--mg-gold);
+}
+.mg-btn:disabled { cursor: default; }
+.mg-btn-primary {
+  background: linear-gradient(180deg, #1a1a28 0%, #13131f 100%);
+  border-color: var(--mg-gold);
+  color: var(--mg-gold);
+}
+.mg-btn-primary:hover {
+  background: linear-gradient(180deg, #2a2418 0%, #1f1c12 100%);
+  border-color: var(--mg-gold-bright);
+  color: var(--mg-gold-bright);
+  box-shadow: 0 0 14px rgba(201, 169, 97, 0.24);
+}
 .mg-btn-ghost {
   background: transparent;
-  color: #777;
+  border-color: transparent;
+  color: var(--mg-text-muted);
   padding: 8px 12px;
-  font-size: 16px;
 }
-.mg-btn-ghost:hover { color: #fff; background: #1f1f3a; }
-.mg-btn-danger { background: #e94560; color: #fff; }
-.mg-btn-danger:hover { background: #d63851; }
+.mg-btn-ghost:hover {
+  background: rgba(201, 169, 97, 0.07);
+  border-color: rgba(201, 169, 97, 0.32);
+  color: var(--mg-gold);
+}
+.mg-btn-danger {
+  background: linear-gradient(180deg, #2a1418 0%, #1c0f12 100%);
+  border-color: var(--mg-wine-bright);
+  color: #d49aa3;
+}
+.mg-btn-danger:hover {
+  background: linear-gradient(180deg, #3a1c22 0%, #2a1418 100%);
+  border-color: var(--mg-wine-bright);
+  color: #e8b8c0;
+  box-shadow: 0 0 12px rgba(139, 58, 74, 0.3);
+}
 .mg-btn-sm { padding: 5px 12px; font-size: 12px; }
 
 /* ---------- Content ---------- */
 .mg-content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 28px 28px 40px;
 }
-.mg-content::-webkit-scrollbar { width: 6px; }
-.mg-content::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
 
-/* ---------- Section ---------- */
+/* ---------- Section Title ---------- */
 .mg-section-title {
-  font-size: 12px;
-  color: #6c5ce7;
-  margin: 8px 0 14px;
+  font-family: var(--mg-serif);
+  font-size: 13px;
+  color: var(--mg-gold);
+  margin: 4px 0 18px;
   text-transform: uppercase;
-  letter-spacing: 1.5px;
+  letter-spacing: 0.18em;
   font-weight: 600;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(201, 169, 97, 0.18);
+  position: relative;
+}
+.mg-section-title::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 32px;
+  height: 1px;
+  background: var(--mg-gold);
 }
 
 /* ---------- Grid & Cards ---------- */
 .mg-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 14px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
 }
 .mg-card {
-  background: #111128;
-  border: 1px solid #1f1f3a;
-  border-radius: 12px;
-  padding: 20px 16px;
+  background: linear-gradient(180deg, var(--mg-surface) 0%, #0f0f1a 100%);
+  border: 1px solid var(--mg-border);
+  border-radius: 3px;
+  padding: 24px 18px 18px;
   text-align: center;
-  transition: all 0.2s;
+  transition: all 0.25s ease;
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
-.mg-card:hover {
-  border-color: #6c5ce7;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(108, 92, 231, 0.15);
+.mg-card::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  pointer-events: none;
+  transition: border-color 0.25s ease;
 }
-.mg-card-emoji { font-size: 44px; margin-bottom: 10px; line-height: 1; }
-.mg-card-name { font-size: 15px; font-weight: 600; margin: 0 0 4px; color: #fff; }
+.mg-card:hover {
+  border-color: var(--mg-gold);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(201, 169, 97, 0.15);
+}
+.mg-card:hover::before { border-color: rgba(201, 169, 97, 0.20); }
+.mg-card-name {
+  font-family: var(--mg-serif);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: var(--mg-text);
+  letter-spacing: 0.05em;
+}
 .mg-card-desc {
   font-size: 12px;
-  color: #888;
-  margin: 0 0 14px;
+  color: var(--mg-text-muted);
+  margin: 0 0 16px;
   min-height: 32px;
-  line-height: 1.4;
+  line-height: 1.5;
+  font-style: italic;
 }
 .mg-card-btns { display: flex; gap: 6px; }
 .mg-badge {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 10px;
+  right: 10px;
   font-size: 10px;
   padding: 2px 8px;
-  border-radius: 4px;
-  background: #1f1f3a;
-  color: #6c5ce7;
+  border-radius: 2px;
+  background: rgba(201, 169, 97, 0.1);
+  border: 1px solid rgba(201, 169, 97, 0.3);
+  color: var(--mg-gold);
   font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 .mg-card-manage {
   position: absolute;
@@ -220,16 +331,21 @@
   gap: 4px;
 }
 .mg-card-manage button {
-  background: #1f1f3a;
-  border: none;
-  border-radius: 4px;
-  color: #888;
+  background: rgba(42, 42, 64, 0.6);
+  border: 1px solid var(--mg-border);
+  border-radius: 2px;
+  color: var(--mg-text-muted);
   cursor: pointer;
-  font-size: 12px;
-  padding: 3px 7px;
-  transition: all 0.15s;
+  font-size: 11px;
+  padding: 3px 8px;
+  font-family: var(--mg-sans);
+  transition: all 0.15s ease;
 }
-.mg-card-manage button:hover { color: #fff; background: #2a2a4a; }
+.mg-card-manage button:hover {
+  color: var(--mg-gold);
+  border-color: var(--mg-gold);
+  background: rgba(201, 169, 97, 0.08);
+}
 
 /* ---------- Game View ---------- */
 .mg-game-view {
@@ -240,13 +356,30 @@
 .mg-game-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: #111128;
-  border-bottom: 1px solid #1f1f3a;
+  gap: 14px;
+  padding: 12px 22px;
+  background: linear-gradient(180deg, rgba(19, 19, 31, 0.92) 0%, rgba(13, 13, 26, 0.6) 100%);
+  border-bottom: 1px solid var(--mg-border);
   flex-shrink: 0;
+  position: relative;
 }
-.mg-game-bar-title { font-size: 16px; font-weight: 600; flex: 1; }
+.mg-game-bar::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(201, 169, 97, 0.4) 50%, transparent 100%);
+}
+.mg-game-bar-title {
+  font-family: var(--mg-serif);
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  color: var(--mg-gold);
+  letter-spacing: 0.05em;
+}
 .mg-game-frame {
   flex: 1;
   border: none;
@@ -256,148 +389,439 @@
 
 /* ---------- Form ---------- */
 .mg-form-wrap {
-  max-width: 640px;
+  max-width: 680px;
   margin: 0 auto;
-  padding: 20px 0;
+  padding: 28px 32px;
+  background: linear-gradient(180deg, var(--mg-surface) 0%, #0f0f1a 100%);
+  border: 1px solid var(--mg-border);
+  border-radius: 3px;
+  position: relative;
 }
-.mg-form-title { font-size: 18px; font-weight: 600; margin: 0 0 20px; }
-.mg-field { margin-bottom: 16px; }
-.mg-field-row { display: flex; gap: 12px; }
+.mg-form-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgba(201, 169, 97, 0.08);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.mg-form-title {
+  font-family: var(--mg-serif);
+  font-size: 19px;
+  font-weight: 600;
+  margin: 0 0 22px;
+  color: var(--mg-gold);
+  letter-spacing: 0.05em;
+}
+.mg-field { margin-bottom: 18px; }
+.mg-field-row { display: flex; gap: 14px; }
 .mg-field-row .mg-field { flex: 1; }
 .mg-label {
   display: block;
-  font-size: 12px;
-  color: #888;
-  margin-bottom: 6px;
-  font-weight: 500;
+  font-size: 11px;
+  color: var(--mg-gold);
+  margin-bottom: 7px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.85;
 }
-.mg-input, .mg-textarea {
+.mg-input, .mg-textarea, select.mg-input {
   width: 100%;
-  background: #111128;
-  border: 1px solid #1f1f3a;
-  border-radius: 8px;
-  color: #e0e0e0;
-  padding: 10px 12px;
+  background: rgba(10, 10, 20, 0.5);
+  border: none;
+  border-bottom: 1px solid var(--mg-border);
+  border-radius: 0;
+  color: var(--mg-text);
+  padding: 9px 4px;
   font-size: 14px;
-  font-family: inherit;
+  font-family: var(--mg-sans);
   box-sizing: border-box;
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 .mg-textarea {
+  border: 1px solid var(--mg-border);
+  border-radius: 2px;
   font-family: "Cascadia Code", "Fira Code", "Courier New", monospace;
   min-height: 320px;
   resize: vertical;
-  line-height: 1.5;
+  line-height: 1.55;
+  padding: 12px 14px;
 }
-.mg-input:focus, .mg-textarea:focus {
+select.mg-input {
+  border: 1px solid var(--mg-border);
+  border-radius: 2px;
+  padding: 9px 12px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--mg-gold) 50%), linear-gradient(135deg, var(--mg-gold) 50%, transparent 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  -webkit-appearance: none;
+  appearance: none;
+}
+select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
+.mg-input:focus, .mg-textarea:focus, select.mg-input:focus {
   outline: none;
-  border-color: #6c5ce7;
+  border-color: var(--mg-gold);
+  background: rgba(10, 10, 20, 0.7);
 }
+.mg-input::placeholder, .mg-textarea::placeholder { color: var(--mg-text-dim); font-style: italic; }
 .mg-form-actions {
   display: flex;
   gap: 12px;
   justify-content: flex-end;
-  margin-top: 20px;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--mg-divider);
 }
 .mg-hint {
   font-size: 12px;
-  color: #555;
-  margin-top: 4px;
+  color: var(--mg-text-dim);
+  margin-top: 6px;
   line-height: 1.5;
+  font-style: italic;
 }
 
 /* ---------- Empty ---------- */
 .mg-empty {
   text-align: center;
-  padding: 40px 20px;
-  color: #555;
+  padding: 56px 24px;
+  color: var(--mg-text-muted);
+  font-style: italic;
 }
-.mg-empty-icon { font-size: 48px; margin-bottom: 12px; }
+.mg-empty-icon { display: none; }
 
 /* ---------- Preset ---------- */
 .mg-preset-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
-  background: #111128;
-  border: 1px solid #1f1f3a;
-  border-radius: 10px;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, var(--mg-surface) 0%, #0f0f1a 100%);
+  border: 1px solid var(--mg-border);
+  border-radius: 3px;
   margin-bottom: 10px;
+  transition: border-color 0.2s ease;
 }
+.mg-preset-row:hover { border-color: rgba(201, 169, 97, 0.35); }
 .mg-preset-info { flex: 1; }
-.mg-preset-name { font-size: 15px; font-weight: 600; color: #fff; margin: 0 0 4px; }
-.mg-preset-summary { font-size: 12px; color: #888; }
+.mg-preset-name {
+  font-family: var(--mg-serif);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--mg-text);
+  margin: 0 0 4px;
+  letter-spacing: 0.04em;
+}
+.mg-preset-summary {
+  font-size: 12px;
+  color: var(--mg-text-muted);
+  letter-spacing: 0.03em;
+}
 .mg-preset-actions { display: flex; gap: 8px; }
-.mg-check-list { display: flex; flex-direction: column; gap: 10px; max-height: 280px; overflow-y: auto; padding: 8px; background: #0d0d20; border: 1px solid #1f1f3a; border-radius: 8px; }
-.mg-check-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: #111128; border-radius: 6px; }
-.mg-check-item label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
-.mg-check-config { display: flex; gap: 12px; flex-wrap: wrap; padding-left: 24px; }
-.mg-check-config label { font-size: 12px; color: #888; display: flex; align-items: center; gap: 4px; }
-.mg-check-config input[type="number"] { width: 60px; }
-.mg-loading { text-align: center; padding: 30px; color: #555; }
 
-/* ---------- Werewolf ---------- */
-.mg-role-card {
-  background: linear-gradient(135deg,#2d1b4e,#1a1a2e);
-  border: 1px solid #6c5ce7;
-  border-radius: 12px;
-  padding: 18px;
-  margin-bottom: 16px;
+.mg-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 10px;
+  background: rgba(10, 10, 20, 0.4);
+  border: 1px solid var(--mg-border);
+  border-radius: 2px;
+}
+.mg-check-item {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding: 9px 10px;
+  background: rgba(19, 19, 31, 0.6);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  transition: border-color 0.15s ease;
 }
-.mg-role-emoji { font-size: 32px; }
-.mg-role-name { color: #ffd93d; }
-.mg-role-skill { font-size: 12px; color: #888; }
+.mg-check-item:hover { border-color: rgba(201, 169, 97, 0.18); }
+.mg-check-item label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--mg-text);
+}
+.mg-check-item input[type="checkbox"] {
+  accent-color: var(--mg-gold);
+  cursor: pointer;
+}
+.mg-check-config {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-left: 24px;
+}
+.mg-check-config label {
+  font-size: 12px;
+  color: var(--mg-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.mg-check-config input[type="number"] { width: 60px; }
+.mg-check-config input[type="checkbox"] { accent-color: var(--mg-gold); }
+
+.mg-loading {
+  text-align: center;
+  padding: 30px;
+  color: var(--mg-text-dim);
+  font-style: italic;
+}
+
+/* ---------- Werewolf · Role Card ---------- */
+.mg-role-card {
+  background:
+    linear-gradient(135deg, rgba(122, 46, 58, 0.20) 0%, rgba(19, 19, 31, 0.95) 55%, #0d0d1a 100%);
+  border: 1px solid var(--mg-gold);
+  border-radius: 3px;
+  padding: 20px 22px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+  box-shadow: 0 0 0 1px rgba(201, 169, 97, 0.08), 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+.mg-role-card::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px solid rgba(201, 169, 97, 0.20);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.mg-role-emoji { display: none; }
+.mg-role-name {
+  font-family: var(--mg-serif);
+  color: var(--mg-gold);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.mg-role-skill {
+  font-size: 12px;
+  color: var(--mg-text-muted);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+/* ---------- Werewolf · Seats ---------- */
 .mg-seats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 .mg-seat-card {
-  background: #111128;
-  border: 1px solid #1f1f3a;
-  border-radius: 10px;
-  padding: 12px 8px;
+  background: linear-gradient(180deg, var(--mg-surface) 0%, #0f0f1a 100%);
+  border: 1px solid var(--mg-border);
+  border-radius: 3px;
+  padding: 14px 8px 12px;
   text-align: center;
+  position: relative;
+  transition: all 0.2s ease;
 }
-.mg-seat-card.dead { opacity: .45; }
-.mg-seat-card.is-user { border-color: #6c5ce7; }
-.mg-seat-num { font-size: 12px; color: #6c5ce7; font-weight: 600; }
-.mg-seat-name { font-size: 13px; color: #fff; margin: 4px 0; }
-.mg-seat-status { font-size: 11px; color: #888; }
+.mg-seat-card.is-user {
+  border-color: var(--mg-gold);
+  box-shadow: 0 0 0 1px rgba(201, 169, 97, 0.18), 0 0 16px rgba(201, 169, 97, 0.18);
+}
+.mg-seat-card.dead {
+  opacity: 0.5;
+  filter: grayscale(0.6);
+  background: rgba(10, 10, 20, 0.4);
+}
+.mg-seat-card.dead::after {
+  content: "出局";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-12deg);
+  font-family: var(--mg-serif);
+  font-size: 14px;
+  font-style: italic;
+  color: rgba(196, 120, 138, 0.75);
+  letter-spacing: 0.15em;
+  border: 1px solid rgba(139, 58, 74, 0.5);
+  padding: 2px 10px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.mg-seat-num {
+  font-size: 11px;
+  color: var(--mg-gold);
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.mg-seat-name {
+  font-family: var(--mg-serif);
+  font-size: 13px;
+  color: var(--mg-text);
+  margin: 5px 0 3px;
+  letter-spacing: 0.03em;
+}
+.mg-seat-status {
+  font-size: 11px;
+  color: var(--mg-text-dim);
+  font-style: italic;
+}
+
+/* ---------- Werewolf · Ganelog ---------- */
 .mg-gamelog {
-  background: #0d0d20;
-  border: 1px solid #1f1f3a;
-  border-radius: 8px;
-  padding: 12px;
+  background: linear-gradient(180deg, rgba(10, 10, 20, 0.7) 0%, rgba(13, 13, 26, 0.5) 100%);
+  border: 1px solid var(--mg-border-gold);
+  border-radius: 2px;
+  padding: 14px 16px;
   min-height: 120px;
-  max-height: 320px;
+  max-height: 340px;
   overflow-y: auto;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.7;
 }
-.mg-gamelog-line { margin: 4px 0; padding: 4px 8px; border-radius: 4px; }
-.mg-gamelog-line.dm { color: #ffd93d; }
-.mg-gamelog-line.msg { color: #e0e0e0; }
-.mg-gamelog-line.vote { color: #e94560; }
-.mg-gamelog-line.heart { color: #6c5ce7; font-style: italic; }
+.mg-gamelog-line {
+  margin: 5px 0;
+  padding: 4px 10px;
+  border-radius: 2px;
+  border-left: 2px solid transparent;
+}
+.mg-gamelog-line.dm {
+  color: var(--mg-gold);
+  font-family: var(--mg-serif);
+  border-left-color: var(--mg-gold);
+  background: rgba(201, 169, 97, 0.05);
+  letter-spacing: 0.02em;
+}
+.mg-gamelog-line.msg {
+  color: var(--mg-text);
+}
+.mg-gamelog-line.vote {
+  color: #c4788a;
+  border-left-color: var(--mg-wine-bright);
+  background: rgba(139, 58, 74, 0.07);
+}
+.mg-gamelog-line.heart {
+  color: #b57fa0;
+  font-style: italic;
+  opacity: 0.7;
+}
+.mg-gamelog-line.private {
+  color: var(--mg-gold);
+  font-style: italic;
+  opacity: 0.85;
+  border-left-color: rgba(201, 169, 97, 0.4);
+}
 
-/* ---------- Werewolf Phase / Action ---------- */
-.mg-phase-label { font-size: 12px; color: #6c5ce7; margin-bottom: 8px; }
-.mg-action-panel { background: #111128; border: 1px solid #1f1f3a; border-radius: 8px; padding: 12px; margin: 10px 0; }
-.mg-action-panel-title { font-size: 13px; color: #ffd93d; margin-bottom: 8px; }
-.mg-target-btns { display: flex; flex-wrap: wrap; gap: 6px; }
-.mg-target-btn { background: #1f1f3a; border: 1px solid #2a2a4a; color: #e0e0e0; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px; font-family: inherit; }
-.mg-target-btn:hover { background: #6c5ce7; color: #fff; }
-.mg-speak-area { width: 100%; background: #0d0d20; border: 1px solid #1f1f3a; border-radius: 8px; color: #e0e0e0; padding: 10px; font-size: 14px; min-height: 80px; box-sizing: border-box; font-family: inherit; resize: vertical; }
-.mg-speak-area:focus { outline: none; border-color: #6c5ce7; }
-.mg-game-over { text-align: center; padding: 40px 20px; }
-.mg-game-over-title { font-size: 32px; font-weight: 700; margin-bottom: 12px; }
-.mg-game-over-wolf { color: #e94560; }
-.mg-game-over-good { color: #6c5ce7; }
+/* ---------- Werewolf · Phase / Action ---------- */
+.mg-phase-label {
+  font-size: 11px;
+  color: var(--mg-gold);
+  margin-bottom: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.mg-action-panel {
+  background: linear-gradient(180deg, var(--mg-surface) 0%, #0f0f1a 100%);
+  border: 1px solid var(--mg-border);
+  border-radius: 3px;
+  padding: 14px 16px;
+  margin: 12px 0;
+}
+.mg-action-panel-title {
+  font-family: var(--mg-serif);
+  font-size: 14px;
+  color: var(--mg-gold);
+  margin-bottom: 10px;
+  letter-spacing: 0.05em;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(201, 169, 97, 0.15);
+}
+.mg-target-btns { display: flex; flex-wrap: wrap; gap: 7px; }
+.mg-target-btn {
+  background: rgba(10, 10, 20, 0.5);
+  border: 1px solid var(--mg-border);
+  color: var(--mg-text);
+  border-radius: 2px;
+  padding: 6px 13px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--mg-sans);
+  transition: all 0.18s ease;
+}
+.mg-target-btn:hover {
+  background: rgba(201, 169, 97, 0.08);
+  border-color: var(--mg-gold);
+  color: var(--mg-gold);
+}
+.mg-speak-area {
+  width: 100%;
+  background: rgba(10, 10, 20, 0.6);
+  border: 1px solid var(--mg-border);
+  border-radius: 2px;
+  color: var(--mg-text);
+  padding: 11px 13px;
+  font-size: 14px;
+  min-height: 84px;
+  box-sizing: border-box;
+  font-family: var(--mg-sans);
+  resize: vertical;
+  line-height: 1.55;
+  transition: border-color 0.2s ease;
+}
+.mg-speak-area:focus {
+  outline: none;
+  border-color: var(--mg-gold);
+}
+.mg-speak-area::placeholder { color: var(--mg-text-dim); font-style: italic; }
+
+/* ---------- Game Over ---------- */
+.mg-game-over {
+  text-align: center;
+  padding: 44px 20px 28px;
+}
+.mg-game-over-title {
+  font-family: var(--mg-serif);
+  font-size: 34px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 24px rgba(201, 169, 97, 0.2);
+}
+.mg-game-over-wolf {
+  color: #c4788a;
+  text-shadow: 0 0 24px rgba(139, 58, 74, 0.3);
+}
+.mg-game-over-good {
+  color: var(--mg-gold);
+  text-shadow: 0 0 24px rgba(201, 169, 97, 0.3);
+}
+
+/* ---------- Translation Toggle ---------- */
+.mg-trans-toggle {
+  color: var(--mg-gold);
+  cursor: pointer;
+  font-size: 11px;
+  border: 1px solid rgba(201, 169, 97, 0.5);
+  border-radius: 2px;
+  padding: 0 5px;
+  margin-left: 6px;
+  letter-spacing: 0.05em;
+}
+.mg-trans-toggle:hover { background: rgba(201, 169, 97, 0.1); }
+.mg-trans-zh {
+  color: #9a8f7a;
+  margin-left: 6px;
+  font-style: italic;
+}
 `;
 
   /* ============================================================
@@ -471,11 +895,11 @@
     var html =
       '<div class="mini-games-root">' +
       '<div class="mg-header">' +
-      '<h1 class="mg-title">🎮 小游戏</h1>' +
+      '<h1 class="mg-title">小游戏</h1>' +
       '<div class="mg-actions">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="presets">⚙ 预设管理</button>' +
-      '<button class="mg-btn mg-btn-primary" data-action="add">+ 添加游戏</button>' +
-      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">✕</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="presets">预设管理</button>' +
+      '<button class="mg-btn mg-btn-primary" data-action="add">添加游戏</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
       '</div>' +
       '<div class="mg-content">';
@@ -494,7 +918,7 @@
     if (customGames.length === 0) {
       html +=
         '<div class="mg-empty">' +
-        '<div class="mg-empty-icon">🎲</div>' +
+        '<div class="mg-empty-icon"></div>' +
         '<div>还没有自定义游戏，点击右上角「添加游戏」来添加你的第一个游戏吧</div>' +
         '</div>';
     } else {
@@ -566,14 +990,13 @@
     var badge = isBuiltin
       ? '<span class="mg-badge">内置</span>'
       : '<div class="mg-card-manage">' +
-        '<button data-action="edit" title="编辑">✏</button>' +
-        '<button data-action="delete" title="删除">🗑</button>' +
+        '<button data-action="edit" title="编辑">编</button>' +
+        '<button data-action="delete" title="删除">删</button>' +
         '</div>';
 
     return (
       '<div class="mg-card" data-id="' + esc(game.id) + '">' +
       badge +
-      '<div class="mg-card-emoji">' + esc(game.emoji || '🎮') + '</div>' +
       '<div class="mg-card-name">' + esc(game.name) + '</div>' +
       '<div class="mg-card-desc">' + esc(game.description || '') + '</div>' +
       actions +
@@ -650,9 +1073,9 @@
       '<div class="mini-games-root">' +
       '<div class="mg-game-view">' +
       '<div class="mg-game-bar">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">← 返回</button>' +
-      '<span class="mg-game-bar-title">' + esc(game.emoji || '🎮') + ' ' + esc(game.name) + '</span>' +
-      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">✕</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回</button>' +
+      '<span class="mg-game-bar-title">' + esc(game.name) + '</span>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
       '<iframe class="mg-game-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>' +
       '</div>' +
@@ -702,10 +1125,10 @@
     var html =
       '<div class="mini-games-root">' +
       '<div class="mg-header">' +
-      '<h1 class="mg-title">🐺 狼人杀</h1>' +
+      '<h1 class="mg-title">狼人杀</h1>' +
       '<div class="mg-actions">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">← 返回</button>' +
-      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">✕</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
       '</div>' +
       '<div class="mg-content">' +
@@ -951,7 +1374,9 @@
         memoryCache: {},
         witchSaveUsed: false,
         witchPoisonUsed: false,
-        gameLoopRunning: false
+        gameLoopRunning: false,
+        debugLog: [],
+        debriefs: null
       };
 
       renderWerewolfPlay(container, roche);
@@ -974,7 +1399,7 @@
       var cls = 'mg-seat-card';
       if (!p.alive) cls += ' dead';
       if (p.isUser) cls += ' is-user';
-      var status = p.alive ? '存活' : '已出局 💀';
+      var status = p.alive ? '存活' : '已出局';
       seatsHtml +=
         '<div class="' + cls + '">' +
         '<div class="mg-seat-num">' + p.seat + '号</div>' +
@@ -983,12 +1408,12 @@
         '</div>';
     });
 
-    // 从 gamelogLines 渲染（包含 dm/msg/vote/heart/private 全部行）
+    // 从 gamelogLines 渲染（仅 dm/msg/vote/private，不含 heart；heart 仅进 debugLog）
     var logHtml = '';
     if (Array.isArray(st.gamelogLines)) {
       st.gamelogLines.forEach(function (line) {
-        var renderCls = line.cls === 'private' ? 'dm' : (line.cls || 'msg');
-        logHtml += '<div class="mg-gamelog-line ' + renderCls + '">' + esc(line.text) + '</div>';
+        if (line.cls === 'heart') return; // 心声不显示在主 gamelog
+        logHtml += formatGamelogLineHTML(line);
       });
     }
 
@@ -1007,21 +1432,34 @@
       buttonHtml = '<div class="mg-hint">游戏进行中…</div>';
     }
 
+    // 狼人同伴行（仅当 user 是狼人时显示）
+    var fellowWolvesLine = '';
+    if (st.userRole === '狼人') {
+      var fellowWolves = st.players.filter(function (p) {
+        return p.role === '狼人' && !p.isUser;
+      });
+      if (fellowWolves.length > 0) {
+        fellowWolvesLine = '<div>同伴：<b>' + fellowWolves.map(function (p) { return p.seat + '号'; }).join('、') + '</b></div>';
+      }
+    }
+
     var html =
       '<div class="mini-games-root">' +
       '<div class="mg-header">' +
-      '<h1 class="mg-title">🐺 狼人杀 · 第 ' + st.day + ' 天</h1>' +
+      '<h1 class="mg-title">狼人杀 · 第 ' + st.day + ' 天</h1>' +
       '<div class="mg-actions">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">← 返回大厅</button>' +
-      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">✕</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="debug" title="系统日志">系统日志</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
       '</div>' +
       '<div class="mg-content">' +
       '<div class="mg-form-wrap">' +
       '<div class="mg-role-card">' +
-      '<div class="mg-role-emoji">🎴</div>' +
+      '<div class="mg-role-emoji"></div>' +
       '<div>你的座位号：<b>' + st.userSeat + '</b></div>' +
       '<div>你的底牌：<b class="mg-role-name">' + esc(st.userRole) + '</b></div>' +
+      fellowWolvesLine +
       '<div class="mg-role-skill">' + esc(skillText) + '</div>' +
       '</div>' +
       '<div class="mg-phase-label">' + esc(phaseLabel) + '</div>' +
@@ -1029,6 +1467,15 @@
       '<div class="mg-gamelog" id="ww-gamelog">' + logHtml + '</div>' +
       '<div id="ww-action-panel"></div>' +
       '<div class="mg-form-actions">' + buttonHtml + '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div id="ww-debug-panel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(5,7,15,0.72);z-index:9999;align-items:center;justify-content:center;">' +
+      '<div style="display:flex;flex-direction:column;width:90%;max-width:640px;height:75%;background:linear-gradient(160deg,#11172a,#0a0e1a);border:1px solid rgba(201,169,97,0.4);border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.7);overflow:hidden;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(201,169,97,0.2);">' +
+      '<span style="color:#c9a961;font-weight:600;font-family:Georgia,serif;letter-spacing:0.05em;">系统日志</span>' +
+      '<button class="mg-btn mg-btn-ghost mg-btn-sm" data-action="close-debug">关闭日志</button>' +
+      '</div>' +
+      '<div id="ww-debug-panel-content" style="flex:1;overflow-y:auto;padding:12px 16px;"></div>' +
       '</div>' +
       '</div>' +
       '</div>';
@@ -1053,6 +1500,43 @@
       roche.ui.closeApp();
     };
 
+    // 系统日志面板切换
+    var debugBtn = container.querySelector('[data-action="debug"]');
+    if (debugBtn) {
+      debugBtn.onclick = function () {
+        var panel = container.querySelector('#ww-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
+    var closeDebugBtn = container.querySelector('[data-action="close-debug"]');
+    if (closeDebugBtn) {
+      closeDebugBtn.onclick = function () {
+        var panel = container.querySelector('#ww-debug-panel');
+        if (panel) panel.style.display = 'none';
+      };
+    }
+
+    // "译"切换的事件委托（容器级，只挂一次）
+    if (!container._wwTransDelegation) {
+      container.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('mg-trans-toggle')) {
+          var id = t.getAttribute('data-tr');
+          var zh = id ? document.getElementById(id) : null;
+          if (zh) {
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? 'inline' : 'none';
+          }
+        }
+      });
+      container._wwTransDelegation = true;
+    }
+
     // 进入夜晚按钮 → 启动游戏循环
     var nightBtn = container.querySelector('[data-action="night"]');
     if (nightBtn) {
@@ -1069,10 +1553,11 @@
   }
 
   // 向 gamelog 追加一行：写入 gamelogLines + DOM；非 heart/private 也写入 publicLog
-  function appendGamelog(container, text, cls) {
+  // zhText 可选：若提供且非空且与 text 不同，渲染"译"切换
+  function appendGamelog(container, text, cls, zhText) {
     var st = werewolfState;
     if (!st.gamelogLines) st.gamelogLines = [];
-    st.gamelogLines.push({ text: text, cls: cls || 'msg' });
+    st.gamelogLines.push({ text: text, cls: cls || 'msg', zhText: zhText || '' });
     if (cls !== 'heart' && cls !== 'private') {
       st.publicLog.push(text);
     }
@@ -1080,10 +1565,70 @@
     if (logEl) {
       var div = document.createElement('div');
       div.className = 'mg-gamelog-line ' + (cls === 'private' ? 'dm' : (cls || 'msg'));
-      div.textContent = text;
+      if (zhText && zhText.trim() && zhText !== text) {
+        div.innerHTML = formatTranslatable(text, zhText);
+      } else {
+        div.textContent = text;
+      }
       logEl.appendChild(div);
       logEl.scrollTop = logEl.scrollHeight;
     }
+  }
+
+  // 追加调试日志（仅写入 debugLog，不显示在主 gamelog）
+  function appendDebug(type, charName, text, zhText) {
+    var st = werewolfState;
+    if (!st) return;
+    if (!st.debugLog) st.debugLog = [];
+    st.debugLog.push({ type: type, charName: charName || '', text: text || '', zhText: zhText || '' });
+  }
+
+  // 可翻译文本渲染：若有 zhText 则返回带"译"切换的 HTML，否则返回转义文本
+  function formatTranslatable(text, zhText) {
+    if (zhText && zhText.trim() && zhText !== text) {
+      var id = 'tr-' + Math.random().toString(36).slice(2, 8);
+      return esc(text) + ' <span class="mg-trans-toggle" data-tr="' + id + '" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-left:6px;letter-spacing:0.05em;">译</span>' +
+        '<span class="mg-trans-zh" id="' + id + '" style="display:none;color:#9a8f7a;margin-left:6px;font-style:italic;">（' + esc(zhText) + '）</span>';
+    }
+    return esc(text);
+  }
+
+  // 生成 gamelog 一行的 HTML（用于批量重渲染）
+  function formatGamelogLineHTML(line) {
+    var renderCls = line.cls === 'private' ? 'dm' : (line.cls || 'msg');
+    var zh = line.zhText || '';
+    var content = (zh && zh.trim() && zh !== line.text) ? formatTranslatable(line.text, zh) : esc(line.text);
+    return '<div class="mg-gamelog-line ' + renderCls + '">' + content + '</div>';
+  }
+
+  // 渲染调试日志面板内容
+  function renderDebugPanelContent(container) {
+    var st = werewolfState;
+    if (!st || !st.debugLog) return;
+    var contentEl = container.querySelector('#ww-debug-panel-content');
+    if (!contentEl) return;
+    var html = '';
+    st.debugLog.forEach(function (entry) {
+      var color = '#6a6557';
+      if (entry.type === 'prompt') color = '#5b7fa8';
+      else if (entry.type === 'response') color = '#e8e4d8';
+      else if (entry.type === 'heart') color = '#b57fa0';
+      else if (entry.type === 'action') color = '#c9a961';
+      else if (entry.type === 'system') color = '#6a6557';
+      var label = '[' + entry.type + '] ' + esc(entry.charName || '');
+      var textHtml;
+      if (entry.type === 'heart' && entry.zhText && entry.zhText.trim() && entry.zhText !== entry.text) {
+        textHtml = formatTranslatable(entry.text, entry.zhText);
+      } else {
+        textHtml = esc(entry.text);
+      }
+      html += '<div style="margin:6px 0;padding:6px 0;border-bottom:1px solid rgba(201,169,97,0.12);">' +
+        '<div style="color:' + color + ';font-size:11px;font-weight:600;letter-spacing:0.03em;">' + label + '</div>' +
+        '<pre style="margin:3px 0 0;white-space:pre-wrap;word-break:break-word;font-family:\'Cascadia Code\',\'Fira Code\',monospace;font-size:11px;color:#9a8f7a;line-height:1.5;">' + textHtml + '</pre>' +
+        '</div>';
+    });
+    contentEl.innerHTML = html;
+    contentEl.scrollTop = contentEl.scrollHeight;
   }
 
   // 追加 char 历史（仅该 char 自己的过去）
@@ -1117,9 +1662,48 @@
     return false;
   }
 
-  // 渲染游戏结束界面
-  function renderGameOver(container, roche) {
+  // 渲染游戏结束界面（含赛后全员复盘）
+  async function renderGameOver(container, roche) {
     var st = werewolfState;
+    if (!st) return;
+    // 若复盘正在生成，避免重入
+    if (st._debriefInProgress) return;
+
+    renderGameOverScreen(container, roche);
+
+    // 若复盘尚未生成，逐个生成（顺序执行，显示 loading）
+    if (!st.debriefs) {
+      st._debriefInProgress = true;
+      st.debriefs = [];
+      try {
+        for (var i = 0; i < st.players.length; i++) {
+          if (!werewolfState) return; // 状态已清空
+          var p = st.players[i];
+          var text = '';
+          if (p.isUser) {
+            text = '(你)';
+          } else {
+            try {
+              text = await generateDebriefForChar(roche, p);
+            } catch (e) {
+              appendDebug('system', p.name, '复盘 error: ' + (e && e.message || e));
+              text = '(复盘生成失败)';
+            }
+          }
+          if (!werewolfState) return;
+          st.debriefs.push({ seat: p.seat, name: p.name, role: p.role, text: text, isUser: p.isUser });
+          renderGameOverScreen(container, roche);
+        }
+      } finally {
+        if (werewolfState) st._debriefInProgress = false;
+      }
+    }
+  }
+
+  // 渲染游戏结束界面的静态部分（每次复盘进度更新都重渲染）
+  function renderGameOverScreen(container, roche) {
+    var st = werewolfState;
+    if (!st) return;
     var winnerClass = st.winner === '狼人' ? 'mg-game-over-wolf' : 'mg-game-over-good';
     var winnerText = (st.winner || '') + '阵营胜利！';
 
@@ -1139,18 +1723,36 @@
     var logHtml = '';
     if (Array.isArray(st.gamelogLines)) {
       st.gamelogLines.forEach(function (line) {
-        var renderCls = line.cls === 'private' ? 'dm' : (line.cls || 'msg');
-        logHtml += '<div class="mg-gamelog-line ' + renderCls + '">' + esc(line.text) + '</div>';
+        if (line.cls === 'heart') return; // 心声不显示
+        logHtml += formatGamelogLineHTML(line);
+      });
+    }
+
+    // 复盘卡片区域
+    var debriefHtml = '';
+    if (!st.debriefs) {
+      debriefHtml = '<div class="mg-phase-label" style="margin-top:18px;">赛后复盘</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成复盘中...</div>';
+    } else {
+      debriefHtml = '<div class="mg-phase-label" style="margin-top:18px;">赛后复盘</div>';
+      st.debriefs.forEach(function (d) {
+        var tag = d.seat + '号 · ' + esc(d.name) + ' · ' + esc(d.role) + (d.isUser ? ' · (你)' : '');
+        debriefHtml +=
+          '<div style="background:#111128;border:1px solid #1f1f3a;border-radius:10px;padding:12px;margin-bottom:10px;">' +
+          '<div style="color:#ffd93d;font-size:12px;margin-bottom:6px;">' + tag + '</div>' +
+          '<div style="font-size:13px;line-height:1.6;color:#e0e0e0;white-space:pre-wrap;">' + esc(d.text) + '</div>' +
+          '</div>';
       });
     }
 
     var html =
       '<div class="mini-games-root">' +
       '<div class="mg-header">' +
-      '<h1 class="mg-title">🐺 狼人杀</h1>' +
+      '<h1 class="mg-title">狼人杀</h1>' +
       '<div class="mg-actions">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">← 返回大厅</button>' +
-      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">✕</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="debug" title="系统日志">系统日志</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
       '</div>' +
       '<div class="mg-content">' +
@@ -1160,15 +1762,27 @@
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      debriefHtml +
+      '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
       '<div class="mg-gamelog" id="ww-gamelog">' + logHtml + '</div>' +
       '<div class="mg-form-actions">' +
       '<button class="mg-btn mg-btn-primary" data-action="back-hub">返回大厅</button>' +
       '</div>' +
       '</div>' +
       '</div>' +
+      '<div id="ww-debug-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:90%;max-width:640px;height:75%;background:#0d0d20;border:1px solid #6c5ce7;border-radius:12px;z-index:9999;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.6);">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #1f1f3a;">' +
+      '<span style="color:#6c5ce7;font-weight:600;">系统日志</span>' +
+      '<button class="mg-btn mg-btn-ghost mg-btn-sm" data-action="close-debug">关闭日志</button>' +
+      '</div>' +
+      '<div id="ww-debug-panel-content" style="flex:1;overflow-y:auto;padding:10px 14px;"></div>' +
+      '</div>' +
       '</div>';
 
     container.innerHTML = html;
+
+    var logEl = container.querySelector('#ww-gamelog');
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
 
     container.querySelector('[data-action="back"]').onclick = function () {
       werewolfState = null;
@@ -1181,6 +1795,93 @@
       werewolfState = null;
       showHub(container, roche);
     };
+
+    // 系统日志面板
+    var debugBtn = container.querySelector('[data-action="debug"]');
+    if (debugBtn) {
+      debugBtn.onclick = function () {
+        var panel = container.querySelector('#ww-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
+    var closeDebugBtn = container.querySelector('[data-action="close-debug"]');
+    if (closeDebugBtn) {
+      closeDebugBtn.onclick = function () {
+        var panel = container.querySelector('#ww-debug-panel');
+        if (panel) panel.style.display = 'none';
+      };
+    }
+
+    // "译"切换事件委托（容器级，只挂一次）
+    if (!container._wwTransDelegation) {
+      container.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('mg-trans-toggle')) {
+          var id = t.getAttribute('data-tr');
+          var zh = id ? document.getElementById(id) : null;
+          if (zh) {
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? 'inline' : 'none';
+          }
+        }
+      });
+      container._wwTransDelegation = true;
+    }
+  }
+
+  // 为单个 char 生成赛后复盘（纯文本吐槽，非 JSON）
+  async function generateDebriefForChar(roche, player) {
+    var st = werewolfState;
+    var memoryText = await getCharMemoryText(roche, player);
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+    var ownHistory = '(无)';
+    if (st.charHistory[player.id] && st.charHistory[player.id].length > 0) {
+      ownHistory = st.charHistory[player.id].map(function (h) {
+        return '[第' + h.round + '天 ' + h.phase + '] ' + h.content;
+      }).join('\n');
+    }
+
+    var fellowWolves = '';
+    if (player.role === '狼人') {
+      var wolves = st.players.filter(function (p) {
+        return p.role === '狼人' && p.id !== player.id;
+      });
+      if (wolves.length > 0) {
+        fellowWolves = '你的狼人同伴：' + wolves.map(function (p) { return p.seat + '号(' + p.name + ')'; }).join('、') + '。\n';
+      }
+    }
+
+    var systemContent =
+      '【人格优先级宣言】\n' +
+      '你的第一身份是"一个人"。你的说话方式是人格的产物，游戏不能改变它。游戏胜负是次要的，首要是符合你自身人设。\n\n' +
+      '游戏已经结束了。胜利方：' + st.winner + '阵营。你本局的身份是' + player.role + '。\n\n' +
+      '【你的角色信息】\n名字：' + player.name + '\n座位号：' + player.seat + '\n身份：' + player.role + '\n' +
+      fellowWolves +
+      '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
+      '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
+      '\n【你的本局行动历史】\n' + ownHistory + '\n' +
+      '\n【公开事件记录】\n' + publicLogText + '\n' +
+      '\n【复盘要求——赛后日常吐槽】\n' +
+      '现在游戏结束了，你和朋友打完了一局线上狼人杀。请以你这个人的口吻，发一条赛后的真实吐槽。\n' +
+      '- 大白话、接地气、真实吐槽。可以大骂、懊恼、大笑、阴阳怪气、互相甩锅。\n' +
+      '- 绝对拒绝矫情、端着、青春伤痛文学。这就只是一场朋友间的线上游戏，不是什么人生大事。\n' +
+      '- 必须符合你的人设和说话方式（语气、措辞、节奏、口癖）。游戏不能改变你的说话方式。冷漠的人吐槽也冷漠，话痨的人吐槽也话痨。\n' +
+      '- 不要使用游戏套话。把你对这局的真实看法用"你这种人"会说的话表达出来。可以聊自己怎么死的、谁的发言离谱、神职坑不坑、狼人配不配合等。\n' +
+      '- 不要用JSON，直接回复纯文本吐槽，长度50-250字。';
+
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: '请发你的赛后复盘吐槽。' }
+    ];
+    appendDebug('prompt', player.name, JSON.stringify(messages));
+    var br = await roche.ai.chat({ messages: messages, temperature: 0.85 });
+    appendDebug('response', player.name, br && br.text ? br.text : '');
+    return (br && br.text) ? br.text.trim() : '(无)';
   }
 
   function sleep(ms) {
@@ -1233,10 +1934,20 @@
     }
   }
 
-  // Fisher-Yates 洗牌（基于 Math.random）
+  // CSPRNG 整数（真随机，优先 crypto.getRandomValues）
+  function secureRandomInt(maxExclusive) {
+    if (window.crypto && window.crypto.getRandomValues) {
+      var arr = new Uint32Array(1);
+      window.crypto.getRandomValues(arr);
+      return arr[0] % maxExclusive;
+    }
+    return Math.floor(Math.random() * maxExclusive);
+  }
+
+  // Fisher-Yates 洗牌（基于 CSPRNG 真随机）
   function shuffleArray(arr) {
     for (var i = arr.length - 1; i > 0; i--) {
-      var j = Math.floor(Math.random() * (i + 1));
+      var j = secureRandomInt(i + 1);
       var tmp = arr[i];
       arr[i] = arr[j];
       arr[j] = tmp;
@@ -1318,7 +2029,7 @@
     return text;
   }
 
-  // 构建 polling 模式下的单 char 提示词（视野隔离）
+  // 构建 polling 模式下的单 char 提示词（视野隔离 + 人格优先 + 思维链）
   async function buildCharPrompt(roche, player, context) {
     var st = werewolfState;
     var memoryText = await getCharMemoryText(roche, player);
@@ -1346,7 +2057,8 @@
     }
 
     var systemContent =
-      '你是狼人杀游戏的DM（主持人）+角色演绎引擎。你需要扮演一个角色在游戏中做决策。\n\n' +
+      '【人格优先级宣言】\n' +
+      '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系——第二身份才是"本局游戏的玩家"。你的说话方式（语气、措辞、节奏、情感温度）是人格的产物，游戏不能改变它。一个冷漠的人即使在带队也依然冷漠；一个话痨即使在划水也依然话痨。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。游戏胜负是次要的，首要是符合你自身人设。说话方式是人格产物，游戏不能改变它。\n\n' +
       '【你的角色信息】\n' +
       '名字：' + player.name + '\n' +
       '座位号：' + player.seat + '\n' +
@@ -1361,22 +2073,36 @@
       '- 你绝对不能假设自己知道未给出的信息（他人身份、夜间行动、他人心声）。\n' +
       '- 只能基于公开记录和你自己的行动历史做决策。\n' +
       '- 严禁开天眼，严禁读取上帝视角。\n' +
+      (player.role === '狼人' ? '- 狼人互知同伴是规则允许的唯一例外。\n' : '') +
+      '\n【思维链要求——人格优先引擎（写在 thought 字段内）】\n' +
+      '在做出决策前，你必须在 thought 字段内完成以下思维链（这是内部推理，不要外露到 speech）：\n' +
+      '1. 人设全貌加载：我是谁？我怎么说话（语气、措辞、节奏、口癖、标点习惯）？我对user的初始态度是什么？\n' +
+      '2. 记忆回溯：我和user现在是什么关系？经历过什么转折？写下"经过记忆塑造后的现在的我"的一句话肖像。\n' +
+      '3. 语气基线校准：如果这不是一场狼人杀，只是群聊里此刻我对user会说的一句话？写下这句示范——这就是我的语气基线，后续所有发言都必须从这里生长出来。游戏信息可以改变我说话的内容，但绝不能改变我说话的温度和质地。\n' +
+      '4. 游戏决策→语气翻译：把我的游戏策略（站边/踩人/划水/带队/伪装）翻译成"我这种人"会说的话，不能用游戏套话。自检：把翻译后的句子拿给认识我的人看，能不能不看名字就认出是我说的？如果听起来像任何一个路人玩家都能说的话——翻译失败，重来。\n' +
+      '5. 防OOC自检：这句话和我[3]的语气基线一致吗？冷漠的人不能忽然热情，话痨不能忽然沉默，傲娇不能忽然直球。听起来像"一个玩家"在说话还是"我"在说话？\n' +
       '\n【当前决策请求】\n' + context + '\n' +
-      '\n请以严格JSON格式回复，不要包含任何其他文字：\n' +
-      '{ "thought":"<内心独白，符合角色人格>", "action":"<行动描述>", "target":"<目标座位号或null>", "speech":"<白天发言或空>" }';
+      '\n【输出要求】\n' +
+      '请以严格JSON格式回复，不要包含任何其他文字：\n' +
+      '{ "thought":"<按上述5步完成的思维链>", "action":"<行动描述>", "target":"<目标座位号或null>", "speech":"<白天发言或空>", "speechZh":"<非中文母语者填中文翻译，否则留空>", "thoughtZh":"<非中文母语者填中文翻译，否则留空>" }\n' +
+      '\n【非中文母语者翻译规则】\n' +
+      '如果你的人设是非中文母语者，你的 thought/speech 应使用你的母语表达，并务必在 speechZh/thoughtZh 字段提供中文翻译。若你本就说中文，这两个字段留空。';
 
     var userContent = '请做出你的决策并按JSON格式回复。';
 
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent }
+    ];
+    appendDebug('prompt', player.name, JSON.stringify(messages));
+
     return {
-      messages: [
-        { role: 'system', content: systemContent },
-        { role: 'user', content: userContent }
-      ],
+      messages: messages,
       temperature: 0.7
     };
   }
 
-  // 构建 batch 模式下的批量提示词（一次演算多个 char）
+  // 构建 batch 模式下的批量提示词（一次演算多个 char + 人格优先）
   async function buildBatchPrompt(roche, context) {
     var st = werewolfState;
     var aliveChars = st.players.filter(function (p) { return p.alive && !p.isUser; });
@@ -1391,8 +2117,17 @@
           return '[第' + h.round + '天 ' + h.phase + '] ' + h.content;
         }).join('\n');
       }
+      var fellowLine = '';
+      if (p.role === '狼人') {
+        var fw = st.players.filter(function (q) {
+          return q.role === '狼人' && q.id !== p.id && q.alive;
+        });
+        if (fw.length > 0) {
+          fellowLine = ' / 狼人同伴:' + fw.map(function (q) { return q.seat + '号'; }).join('、');
+        }
+      }
       charsInfo +=
-        '座位' + p.seat + '号 / ' + p.name + ' / 身份:' + p.role + '\n' +
+        '座位' + p.seat + '号 / ' + p.name + ' / 身份:' + p.role + fellowLine + '\n' +
         '人设:' + (p.personaText || '(无)') + '\n' +
         '记忆:' + (memoryText || '(无)') + '\n' +
         '个人历史:' + ownHistory + '\n---\n';
@@ -1403,23 +2138,38 @@
       : '(无)';
 
     var systemContent =
-      '你是狼人杀游戏的批量演算引擎。你需要为多个角色同时做出决策。\n\n' +
+      '【人格优先级宣言】\n' +
+      '每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系——第二身份才是"本局游戏的玩家"。角色的说话方式（语气、措辞、节奏、情感温度）是人格的产物，游戏不能改变它。游戏胜负是次要的，首要是符合角色自身人设。绝对禁止角色为了"配合游戏需要"而改变自己的说话方式。\n\n' +
       '【角色列表】\n' + charsInfo + '\n' +
       '【公开事件记录】\n' + publicLogText + '\n' +
       '\n【视野隔离铁律】\n' +
       '- 每个角色只能基于公开信息和自己个人历史做决策。\n' +
       '- 严禁开天眼，严禁读取上帝视角。\n' +
+      '- 狼人互知同伴是规则允许的唯一例外。\n' +
+      '\n【思维链要求——人格优先引擎（写在 thought 字段内）】\n' +
+      '每个角色在 thought 字段内完成思维链：\n' +
+      '1. 人设全貌加载：我是谁？我怎么说话（语气、措辞、节奏、口癖）？\n' +
+      '2. 记忆回溯：我和user现在是什么关系？写下"经过记忆塑造后的现在的我"的一句话肖像。\n' +
+      '3. 语气基线校准：写下我语气基线的示范句，后续发言从这里生长。\n' +
+      '4. 游戏决策→语气翻译：把策略翻译成"我这种人"会说的话，不用游戏套话。自检：不看名字能认出是我说的吗？\n' +
+      '5. 防OOC自检：这句话符合我的语气基线吗？冷漠不能忽然热情，话痨不能忽然沉默。\n' +
       '\n【决策请求】\n' + context + '\n' +
-      '\n请为每个相关角色做出决策，以严格JSON数组格式回复：\n' +
-      '[{ "seat":<座位号>, "thought":"<内心独白>", "action":"<行动描述>", "target":"<目标座位号或null>" }]';
+      '\n【输出要求】\n' +
+      '请为每个相关角色做出决策，以严格JSON数组格式回复：\n' +
+      '[{ "seat":<座位号>, "thought":"<思维链>", "action":"<行动描述>", "target":"<目标座位号或null>", "speech":"<发言或空>", "speechZh":"<非中文母语者填中文翻译>", "thoughtZh":"<非中文母语者填中文翻译>" }]\n' +
+      '\n【非中文母语者翻译规则】\n' +
+      '如果角色人设是非中文母语者，其 thought/speech 应使用其母语表达，并务必在 speechZh/thoughtZh 字段提供中文翻译。若本就说中文，这两个字段留空。';
 
     var userContent = '请为所有角色做出决策并按JSON数组格式回复。';
 
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent }
+    ];
+    appendDebug('prompt', '批量', JSON.stringify(messages));
+
     return {
-      messages: [
-        { role: 'system', content: systemContent },
-        { role: 'user', content: userContent }
-      ],
+      messages: messages,
       temperature: 0.7
     };
   }
@@ -1433,7 +2183,7 @@
       var html = '';
       if (promptType === 'wolf_target') {
         html = '<div class="mg-action-panel">' +
-          '<div class="mg-action-panel-title">🐺 狼人行动：选择今晚要击杀的玩家</div>' +
+          '<div class="mg-action-panel-title">狼人行动：选择今晚要击杀的玩家</div>' +
           '<div class="mg-target-btns">' +
           options.targets.map(function (seat) {
             return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
@@ -1441,7 +2191,7 @@
           '</div></div>';
       } else if (promptType === 'witch_save') {
         html = '<div class="mg-action-panel">' +
-          '<div class="mg-action-panel-title">🧪 女巫行动</div>' +
+          '<div class="mg-action-panel-title">女巫行动</div>' +
           (options.victim != null
             ? '<div>今晚 <b>' + options.victim + '号</b> 被刀。是否使用解药？</div>'
             : '<div>今晚没有人被刀。</div>') +
@@ -1452,7 +2202,7 @@
           '</div></div>';
       } else if (promptType === 'witch_poison') {
         html = '<div class="mg-action-panel">' +
-          '<div class="mg-action-panel-title">🧪 选择要毒的玩家（或不毒）</div>' +
+          '<div class="mg-action-panel-title">选择要毒的玩家（或不毒）</div>' +
           '<div class="mg-target-btns">' +
           options.targets.map(function (seat) {
             return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
@@ -1461,7 +2211,7 @@
           '</div></div>';
       } else if (promptType === 'seer_check') {
         html = '<div class="mg-action-panel">' +
-          '<div class="mg-action-panel-title">🔮 预言家行动：选择要查验的玩家</div>' +
+          '<div class="mg-action-panel-title">预言家行动：选择要查验的玩家</div>' +
           '<div class="mg-target-btns">' +
           options.targets.map(function (seat) {
             return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
@@ -1469,13 +2219,13 @@
           '</div></div>';
       } else if (promptType === 'day_speak') {
         html = '<div class="mg-action-panel">' +
-          '<div class="mg-action-panel-title">🎤 ' + options.seat + '号发言</div>' +
+          '<div class="mg-action-panel-title">' + options.seat + '号发言</div>' +
           '<textarea class="mg-speak-area" id="ww-speak-input" placeholder="请输入你的发言..."></textarea>' +
           '<div class="mg-form-actions"><button class="mg-btn mg-btn-primary" data-action="submit-speak">发言</button></div>' +
           '</div>';
       } else if (promptType === 'day_vote') {
         html = '<div class="mg-action-panel">' +
-          '<div class="mg-action-panel-title">🗳 投票：选择要投出局的玩家</div>' +
+          '<div class="mg-action-panel-title">投票：选择要投出局的玩家</div>' +
           '<div class="mg-target-btns">' +
           options.targets.map(function (seat) {
             return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
@@ -1521,19 +2271,31 @@
   // 主游戏循环
   async function startGameLoop(container, roche) {
     try {
-      while (!werewolfState.gameOver) {
-        await runNight(container, roche);
-        if (werewolfState.gameOver) break;
-        await runDaySpeak(container, roche);
-        if (werewolfState.gameOver) break;
-        await runDayVote(container, roche);
-        if (werewolfState.gameOver) break;
+      while (werewolfState && !werewolfState.gameOver) {
+        try {
+          await runNight(container, roche);
+        } catch (e) {
+          appendDebug('system', 'loop', 'runNight 异常: ' + (e && e.message || String(e)));
+        }
+        if (!werewolfState || werewolfState.gameOver) break;
+        try {
+          await runDaySpeak(container, roche);
+        } catch (e) {
+          appendDebug('system', 'loop', 'runDaySpeak 异常: ' + (e && e.message || String(e)));
+        }
+        if (!werewolfState || werewolfState.gameOver) break;
+        try {
+          await runDayVote(container, roche);
+        } catch (e) {
+          appendDebug('system', 'loop', 'runDayVote 异常: ' + (e && e.message || String(e)));
+        }
+        if (!werewolfState || werewolfState.gameOver) break;
       }
     } finally {
-      werewolfState.gameLoopRunning = false;
-    }
-    if (werewolfState.gameOver) {
-      renderGameOver(container, roche);
+      if (werewolfState) werewolfState.gameLoopRunning = false;
+      if (werewolfState && werewolfState.gameOver) {
+        renderGameOver(container, roche);
+      }
     }
   }
 
@@ -1559,10 +2321,74 @@
     var aliveWolves = st.players.filter(function (p) { return p.alive && p.role === '狼人'; });
     var aliveNonWolves = st.players.filter(function (p) { return p.alive && p.role !== '狼人'; });
 
+    // 安全检查：一方已全灭则直接结算
+    if (aliveWolves.length === 0 || aliveNonWolves.length === 0) {
+      if (checkGameOver(roche)) {
+        appendGamelog(container, '游戏结束！' + st.winner + '阵营胜利！', 'dm');
+      }
+      return;
+    }
+
     // === 狼人阶段 ===
     if (aliveWolves.length > 0 && aliveNonWolves.length > 0) {
       if (userPlayer && userPlayer.role === '狼人' && userPlayer.alive) {
-        // user 是狼人：显示 UI
+        // user 是狼人：显示同伴 + 频道讨论 + UI
+        var fellowWolves = st.players.filter(function (p) {
+          return p.role === '狼人' && !p.isUser && p.alive;
+        });
+        var fellowSeatsStr = fellowWolves.length > 0
+          ? fellowWolves.map(function (p) { return p.seat + '号'; }).join('、')
+          : '（无）';
+        appendGamelog(container, '[DM(狼人频道)] 你的同伴：' + fellowSeatsStr, 'private');
+        rerenderPlay(container, roche);
+
+        // 狼人频道讨论：同伴给出建议
+        if (fellowWolves.length > 0) {
+          var wolfDiscussContext = '狼人频道讨论：作为狼人，你建议今晚刀谁？给出建议和理由。target填建议座位号，action填简短理由。';
+          if (st.mode === 'batch') {
+            try {
+              var wdbp = await buildBatchPrompt(roche, wolfDiscussContext + ' 仅存活的狼人角色需要讨论。');
+              var wdbr = await roche.ai.chat({ messages: wdbp.messages, temperature: 0.7 });
+              appendDebug('response', '批量', wdbr.text);
+              var wdArr = parseJsonResponse(wdbr.text);
+              appendDebug('action', '批量', JSON.stringify(wdArr));
+              if (Array.isArray(wdArr)) {
+                wdArr.forEach(function (d) {
+                  var wolf = st.players.find(function (p) { return p.seat === d.seat && p.role === '狼人' && p.alive && !p.isUser; });
+                  if (wolf && d.target != null) {
+                    var reason = d.action || '';
+                    appendGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：建议杀' + d.target + '号' + (reason ? '，' + reason : ''), 'private');
+                    appendDebug('heart', wolf.name, d.thought || '', d.thoughtZh || '');
+                    appendCharHistory(wolf.id, st.day, 'night', 'heart', d.thought || '');
+                    appendCharHistory(wolf.id, st.day, 'night', 'action', '建议杀' + d.target + '号');
+                  }
+                });
+              }
+            } catch (e) { appendDebug('system', '狼人讨论', 'batch error: ' + (e && e.message || e)); }
+          } else {
+            for (var fwi = 0; fwi < fellowWolves.length; fwi++) {
+              var fwolf = fellowWolves[fwi];
+              try {
+                var fwcp = await buildCharPrompt(roche, fwolf, wolfDiscussContext);
+                var fwcr = await roche.ai.chat({ messages: fwcp.messages, temperature: 0.7 });
+                appendDebug('response', fwolf.name, fwcr.text);
+                var fwcd = parseJsonResponse(fwcr.text);
+                appendDebug('action', fwolf.name, JSON.stringify(fwcd));
+                if (fwcd && fwcd.target != null) {
+                  var freason = fwcd.action || '';
+                  appendGamelog(container, '[狼人频道] ' + fwolf.seat + '号(' + fwolf.name + ')：建议杀' + fwcd.target + '号' + (freason ? '，' + freason : ''), 'private');
+                  appendDebug('heart', fwolf.name, fwcd.thought || '', fwcd.thoughtZh || '');
+                  appendCharHistory(fwolf.id, st.day, 'night', 'heart', fwcd.thought || '');
+                  appendCharHistory(fwolf.id, st.day, 'night', 'action', '建议杀' + fwcd.target + '号');
+                }
+              } catch (e) { appendDebug('system', fwolf.name, '讨论 error: ' + (e && e.message || e)); }
+            }
+          }
+          rerenderPlay(container, roche);
+          await sleep(400);
+        }
+
+        // 显示目标选择 UI
         var wolfTargets = aliveNonWolves.map(function (p) { return p.seat; });
         var wolfResult = await waitForUserInput(container, roche, 'wolf_target', { targets: wolfTargets });
         if (wolfResult && wolfResult.seat) {
@@ -1576,7 +2402,9 @@
           try {
             var bp = await buildBatchPrompt(roche, '狼人请选择今晚要击杀的目标。所有存活狼人共同决定一个目标。仅狼人角色需要行动。');
             var br = await roche.ai.chat({ messages: bp.messages, temperature: 0.7 });
+            appendDebug('response', '批量', br.text);
             var decisions = parseJsonResponse(br.text);
+            appendDebug('action', '批量', JSON.stringify(decisions));
             if (Array.isArray(decisions)) {
               decisions.forEach(function (d) {
                 if (d.target != null) {
@@ -1585,12 +2413,13 @@
                 }
                 var wolf = st.players.find(function (p) { return p.seat === d.seat && p.role === '狼人'; });
                 if (wolf) {
+                  appendDebug('heart', wolf.name, d.thought || '', d.thoughtZh || '');
                   appendCharHistory(wolf.id, st.day, 'night', 'heart', d.thought || '');
                   appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (d.target || '?') + '号');
                 }
               });
             }
-          } catch (e) { /* 忽略 */ }
+          } catch (e) { appendDebug('system', '狼人', 'batch error: ' + (e && e.message || e)); }
         } else {
           // polling：每只狼单独决策
           for (var wi = 0; wi < aliveWolves.length; wi++) {
@@ -1598,8 +2427,11 @@
             try {
               var cp = await buildCharPrompt(roche, wolf, '你是狼人。请选择今晚要击杀的目标（回复座位号）。你和同伴共同决定。');
               var cr = await roche.ai.chat({ messages: cp.messages, temperature: 0.7 });
+              appendDebug('response', wolf.name, cr.text);
               var cd = parseJsonResponse(cr.text);
+              appendDebug('action', wolf.name, JSON.stringify(cd));
               if (cd) {
+                appendDebug('heart', wolf.name, cd.thought || '', cd.thoughtZh || '');
                 appendCharHistory(wolf.id, st.day, 'night', 'heart', cd.thought || '');
                 appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (cd.target || '?') + '号');
                 if (cd.target != null) {
@@ -1607,7 +2439,7 @@
                   if (!isNaN(tt)) wolfVotes[tt] = (wolfVotes[tt] || 0) + 1;
                 }
               }
-            } catch (e) { /* 忽略 */ }
+            } catch (e) { appendDebug('system', wolf.name, 'error: ' + (e && e.message || e)); }
           }
         }
         // 多数票
@@ -1669,7 +2501,9 @@
           try {
             var wbp = await buildBatchPrompt(roche, witchContext + ' 仅女巫角色需要行动。');
             var wbr = await roche.ai.chat({ messages: wbp.messages, temperature: 0.7 });
+            appendDebug('response', '批量', wbr.text);
             var wdArr = parseJsonResponse(wbr.text);
+            appendDebug('action', '批量', JSON.stringify(wdArr));
             if (Array.isArray(wdArr) && wdArr.length > 0) {
               var wd = wdArr.find(function (d) { return d.seat === witch.seat; });
               if (!wd) wd = wdArr[0];
@@ -1686,16 +2520,19 @@
                     st.witchPoisonUsed = true;
                   }
                 }
+                appendDebug('heart', witch.name, wd.thought || '', wd.thoughtZh || '');
                 appendCharHistory(witch.id, st.day, 'night', 'heart', wd.thought || '');
                 appendCharHistory(witch.id, st.day, 'night', 'action', wd.action || '');
               }
             }
-          } catch (e) { /* 忽略 */ }
+          } catch (e) { appendDebug('system', '女巫', 'batch error: ' + (e && e.message || e)); }
         } else {
           try {
             var wcp = await buildCharPrompt(roche, witch, witchContext);
             var wcr = await roche.ai.chat({ messages: wcp.messages, temperature: 0.7 });
+            appendDebug('response', witch.name, wcr.text);
             var wcd = parseJsonResponse(wcr.text);
+            appendDebug('action', witch.name, JSON.stringify(wcd));
             if (wcd) {
               if (wcd.action && wcd.action.indexOf('解药') !== -1 && canSave && victim != null) {
                 st.nightActions.witchSave = true;
@@ -1709,10 +2546,11 @@
                   st.witchPoisonUsed = true;
                 }
               }
+              appendDebug('heart', witch.name, wcd.thought || '', wcd.thoughtZh || '');
               appendCharHistory(witch.id, st.day, 'night', 'heart', wcd.thought || '');
               appendCharHistory(witch.id, st.day, 'night', 'action', wcd.action || '');
             }
-          } catch (e) { /* 忽略 */ }
+          } catch (e) { appendDebug('system', witch.name, 'error: ' + (e && e.message || e)); }
         }
       }
     }
@@ -1746,26 +2584,32 @@
           try {
             var sbp = await buildBatchPrompt(roche, seerContext + ' 仅预言家角色需要行动。');
             var sbr = await roche.ai.chat({ messages: sbp.messages, temperature: 0.7 });
+            appendDebug('response', '批量', sbr.text);
             var sdArr = parseJsonResponse(sbr.text);
+            appendDebug('action', '批量', JSON.stringify(sdArr));
             if (Array.isArray(sdArr) && sdArr.length > 0) {
               var sd = sdArr.find(function (d) { return d.seat === seer.seat; });
               if (!sd) sd = sdArr[0];
               if (sd && sd.target != null) {
                 seerTargetSeat = parseInt(sd.target, 10);
+                appendDebug('heart', seer.name, sd.thought || '', sd.thoughtZh || '');
                 appendCharHistory(seer.id, st.day, 'night', 'heart', sd.thought || '');
               }
             }
-          } catch (e) { /* 忽略 */ }
+          } catch (e) { appendDebug('system', '预言家', 'batch error: ' + (e && e.message || e)); }
         } else {
           try {
             var scp = await buildCharPrompt(roche, seer, seerContext);
             var scr = await roche.ai.chat({ messages: scp.messages, temperature: 0.7 });
+            appendDebug('response', seer.name, scr.text);
             var scd = parseJsonResponse(scr.text);
+            appendDebug('action', seer.name, JSON.stringify(scd));
             if (scd && scd.target != null) {
               seerTargetSeat = parseInt(scd.target, 10);
+              appendDebug('heart', seer.name, scd.thought || '', scd.thoughtZh || '');
               appendCharHistory(seer.id, st.day, 'night', 'heart', scd.thought || '');
             }
-          } catch (e) { /* 忽略 */ }
+          } catch (e) { appendDebug('system', seer.name, 'error: ' + (e && e.message || e)); }
         }
 
         if (seerTargetSeat != null) {
@@ -1829,7 +2673,7 @@
       var player = st.players.find(function (p) { return p.seat === seat; });
       if (!player) continue;
       if (!player.alive) {
-        appendGamelog(container, '💀 ' + seat + '号已出局', 'msg');
+        appendGamelog(container, seat + '号已出局', 'msg');
         continue;
       }
 
@@ -1848,19 +2692,22 @@
         try {
           var sp = await buildCharPrompt(roche, player, speakContext);
           var sr = await roche.ai.chat({ messages: sp.messages, temperature: 0.7 });
+          appendDebug('response', player.name, sr.text);
           var sd = parseJsonResponse(sr.text);
+          appendDebug('action', player.name, JSON.stringify(sd));
           if (sd) {
-            if (sd.thought) {
-              appendGamelog(container, '[心声] ' + seat + '号：' + sd.thought, 'heart');
-            }
+            // 心声仅进 debugLog，不进主 gamelog
+            appendDebug('heart', player.name, sd.thought || '', sd.thoughtZh || '');
             var speech2 = sd.speech || '(无发言)';
-            appendGamelog(container, seat + '号(' + player.name + ')：' + speech2, 'msg');
+            var speechZh2 = sd.speechZh || '';
+            appendGamelog(container, seat + '号(' + player.name + ')：' + speech2, 'msg', speechZh2);
             appendCharHistory(player.id, st.day, 'day_speak', 'heart', sd.thought || '');
             appendCharHistory(player.id, st.day, 'day_speak', 'speech', speech2);
           } else {
             appendGamelog(container, seat + '号(' + player.name + ')：(发言异常)', 'msg');
           }
         } catch (e) {
+          appendDebug('system', player.name, '发言 error: ' + (e && e.message || e));
           appendGamelog(container, seat + '号(' + player.name + ')：(发言异常)', 'msg');
         }
         rerenderPlay(container, roche);
@@ -1894,17 +2741,20 @@
       try {
         var vp = await buildCharPrompt(roche, player, voteContext);
         var vr = await roche.ai.chat({ messages: vp.messages, temperature: 0.7 });
+        appendDebug('response', player.name, vr.text);
         var vd = parseJsonResponse(vr.text);
+        appendDebug('action', player.name, JSON.stringify(vd));
         if (vd && vd.target != null) {
           var target = parseInt(vd.target, 10);
           var validTarget = st.players.find(function (p) { return p.seat === target && p.alive && p.seat !== player.seat; });
           if (validTarget) {
             votes[target] = (votes[target] || 0) + 1;
-            appendGamelog(container, player.seat + '号 → ' + target + '号', 'vote');
+            appendGamelog(container, player.seat + '号 投 ' + target + '号', 'vote');
+            appendDebug('heart', player.name, vd.thought || '', vd.thoughtZh || '');
             appendCharHistory(player.id, st.day, 'day_vote', 'vote', '投了' + target + '号' + (vd.thought ? '（' + vd.thought + '）' : ''));
           }
         }
-      } catch (e) { /* 忽略 */ }
+      } catch (e) { appendDebug('system', player.name, '投票 error: ' + (e && e.message || e)); }
       rerenderPlay(container, roche);
     }
 
@@ -1917,7 +2767,7 @@
       var voteResult = await waitForUserInput(container, roche, 'day_vote', { targets: userVoteTargets });
       if (voteResult && voteResult.seat) {
         votes[voteResult.seat] = (votes[voteResult.seat] || 0) + 1;
-        appendGamelog(container, userPlayer.seat + '号 → ' + voteResult.seat + '号', 'vote');
+        appendGamelog(container, userPlayer.seat + '号 投 ' + voteResult.seat + '号', 'vote');
         appendCharHistory(userPlayer.id, st.day, 'day_vote', 'vote', '投了' + voteResult.seat + '号');
       } else {
         appendGamelog(container, userPlayer.seat + '号弃票', 'vote');
@@ -1963,9 +2813,9 @@
     var html =
       '<div class="mini-games-root">' +
       '<div class="mg-header">' +
-      '<h1 class="mg-title">' + (isEdit ? '✏ 编辑游戏' : '➕ 添加游戏') + '</h1>' +
+      '<h1 class="mg-title">' + (isEdit ? '编辑游戏' : '添加游戏') + '</h1>' +
       '<div class="mg-actions">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">← 返回</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
       '</div>' +
       '</div>' +
       '<div class="mg-content">' +
@@ -1973,7 +2823,7 @@
       '<div class="mg-field-row">' +
       '<div class="mg-field" style="max-width:80px;">' +
       '<label class="mg-label">图标</label>' +
-      '<input class="mg-input" id="mg-emoji" value="' + esc(existing ? existing.emoji : '🎮') + '" maxlength="4" placeholder="🎮">' +
+      '<input class="mg-input" id="mg-emoji" value="' + esc(existing ? existing.emoji : '') + '" maxlength="4" placeholder="图标">' +
       '</div>' +
       '<div class="mg-field">' +
       '<label class="mg-label">游戏名称</label>' +
@@ -2007,7 +2857,7 @@
       showHub(container, roche);
     };
     container.querySelector('[data-action="save"]').onclick = async function () {
-      var emoji = container.querySelector('#mg-emoji').value.trim() || '🎮';
+      var emoji = container.querySelector('#mg-emoji').value.trim() || '';
       var name = container.querySelector('#mg-name').value.trim();
       var desc = container.querySelector('#mg-desc').value.trim();
       var htmlContent = container.querySelector('#mg-html').value.trim();
@@ -2077,10 +2927,10 @@
     var html =
       '<div class="mini-games-root">' +
       '<div class="mg-header">' +
-      '<h1 class="mg-title">⚙ 预设管理</h1>' +
+      '<h1 class="mg-title">预设管理</h1>' +
       '<div class="mg-actions">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">← 返回</button>' +
-      '<button class="mg-btn mg-btn-primary" data-action="new">+ 新建预设</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
+      '<button class="mg-btn mg-btn-primary" data-action="new">新建预设</button>' +
       '</div>' +
       '</div>' +
       '<div class="mg-content">';
@@ -2088,7 +2938,7 @@
     if (presets.length === 0) {
       html +=
         '<div class="mg-empty">' +
-        '<div class="mg-empty-icon">⚙</div>' +
+        '<div class="mg-empty-icon"></div>' +
         '<div>还没有预设，点击右上角「新建预设」创建</div>' +
         '</div>';
     } else {
@@ -2161,9 +3011,9 @@
     var html =
       '<div class="mini-games-root">' +
       '<div class="mg-header">' +
-      '<h1 class="mg-title">' + (isEdit ? '✏ 编辑预设' : '➕ 新建预设') + '</h1>' +
+      '<h1 class="mg-title">' + (isEdit ? '编辑预设' : '新建预设') + '</h1>' +
       '<div class="mg-actions">' +
-      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">← 返回</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
       '</div>' +
       '</div>' +
       '<div class="mg-content">' +
