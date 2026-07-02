@@ -1170,8 +1170,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</select>' +
       '</div>' +
       '<div class="mg-field">' +
-      '<label class="mg-label"><input type="checkbox" disabled> 旁观模式（即将推出）</label>' +
-      '<div class="mg-hint">未来功能：user 不参与，旁观 char 互杀</div>' +
+      '<label class="mg-label"><input type="checkbox" id="ww-spectator"> 旁观模式</label>' +
+      '<div class="mg-hint">开启后你以第三人称旁观：所有角色由 AI 操控，你以第三人称旁观全场（含心声与夜间行动）</div>' +
       '</div>' +
       '<div class="mg-form-actions">' +
       '<button class="mg-btn mg-btn-primary" data-action="start">开始游戏</button>' +
@@ -1307,6 +1307,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       checks.forEach(function (cb) { checkedIds.push(cb.value); });
       var count = parseInt(countSel.value, 10);
       var mode = container.querySelector('#ww-mode').value;
+      var spectator = container.querySelector('#ww-spectator') ? container.querySelector('#ww-spectator').checked : false;
 
       if (checkedIds.length !== count - 1) {
         roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
@@ -1416,6 +1417,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         phase: "play",
         day: 0,
         mode: mode,
+        spectator: spectator,
         preset: preset || null,
         count: count,
         players: allPlayers,
@@ -1463,19 +1465,21 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       if (!p.alive) cls += ' dead';
       if (p.isUser) cls += ' is-user';
       var status = p.alive ? '存活' : '已出局';
+      if (st.spectator) status += ' · ' + p.role;
       seatsHtml +=
         '<div class="' + cls + '">' +
         '<div class="mg-seat-num">' + p.seat + '号</div>' +
         '<div class="mg-seat-name">' + esc(p.name) + '</div>' +
-        '<div class="mg-seat-status">' + status + '</div>' +
+        '<div class="mg-seat-status">' + esc(status) + '</div>' +
         '</div>';
     });
 
     // 从 gamelogLines 渲染（仅 dm/msg/vote/private，不含 heart；heart 仅进 debugLog）
+    // 旁观模式下 heart 也显示在主 gamelog（上帝视角）
     var logHtml = '';
     if (Array.isArray(st.gamelogLines)) {
       st.gamelogLines.forEach(function (line) {
-        if (line.cls === 'heart') return; // 心声不显示在主 gamelog
+        if (line.cls === 'heart' && !st.spectator) return; // 心声不显示在主 gamelog（旁观模式除外）
         logHtml += formatGamelogLineHTML(line);
       });
     }
@@ -1512,7 +1516,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<h1 class="mg-title">狼人杀 · 第 ' + st.day + ' 天</h1>' +
       '<div class="mg-actions">' +
       '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
-      '<button class="mg-btn mg-btn-ghost" data-action="debug" title="系统日志">系统日志</button>' +
       '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
       '</div>' +
@@ -1520,10 +1523,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div class="mg-form-wrap">' +
       '<div class="mg-role-card">' +
       '<div class="mg-role-emoji"></div>' +
-      '<div>你的座位号：<b>' + st.userSeat + '</b></div>' +
-      '<div>你的底牌：<b class="mg-role-name">' + esc(st.userRole) + '</b></div>' +
-      fellowWolvesLine +
-      '<div class="mg-role-skill">' + esc(skillText) + '</div>' +
+      (st.spectator
+        ? '<div class="mg-role-name">旁观模式 — 上帝视角</div><div class="mg-role-skill">你以第三人称旁观全场，所有角色由 AI 操控</div>'
+        : '<div>你的座位号：<b>' + st.userSeat + '</b></div>' +
+          '<div>你的底牌：<b class="mg-role-name">' + esc(st.userRole) + '</b></div>' +
+          fellowWolvesLine +
+          '<div class="mg-role-skill">' + esc(skillText) + '</div>'
+      ) +
       '</div>' +
       '<div class="mg-phase-label" id="ww-phase-label">' + esc(phaseLabel) + '</div>' +
       '<div class="mg-seats-grid" id="ww-seats-grid">' + seatsHtml + '</div>' +
@@ -1544,6 +1550,24 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</div>';
 
     container.innerHTML = html;
+    st._container = container;
+
+    // 双击标题打开系统日志（隐藏入口）
+    var titleEl = container.querySelector('.mg-title');
+    if (titleEl) {
+      titleEl.style.cursor = 'pointer';
+      titleEl.title = '双击打开系统日志';
+      titleEl.ondblclick = function () {
+        var panel = container.querySelector('#ww-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
 
     // 恢复 gamelog 滚动位置（若有保存），否则滚到底部
     var logEl = container.querySelector('#ww-gamelog');
@@ -1606,7 +1630,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           var id = t.getAttribute('data-tr');
           var zh = id ? document.getElementById(id) : null;
           if (zh) {
-            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? 'inline' : 'none';
+            var showDisplay = zh.getAttribute('data-display') || 'inline';
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? showDisplay : 'none';
           }
         }
       });
@@ -1637,11 +1662,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (!p.alive) cls += ' dead';
         if (p.isUser) cls += ' is-user';
         var status = p.alive ? '存活' : '已出局';
+        if (st.spectator) status += ' · ' + p.role;
         seatsHtml +=
           '<div class="' + cls + '">' +
           '<div class="mg-seat-num">' + p.seat + '号</div>' +
           '<div class="mg-seat-name">' + esc(p.name) + '</div>' +
-          '<div class="mg-seat-status">' + status + '</div>' +
+          '<div class="mg-seat-status">' + esc(status) + '</div>' +
           '</div>';
       });
       seatsGridEl.innerHTML = seatsHtml;
@@ -1685,11 +1711,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 追加调试日志（仅写入 debugLog，不显示在主 gamelog）
+  // 旁观模式下心声也同步显示在主 gamelog（上帝视角）
   function appendDebug(type, charName, text, zhText) {
     var st = werewolfState;
     if (!st) return;
     if (!st.debugLog) st.debugLog = [];
     st.debugLog.push({ type: type, charName: charName || '', text: text || '', zhText: zhText || '' });
+    if (st.spectator && st._container && type === 'heart' && text) {
+      appendGamelog(st._container, '[' + (charName || '') + ' 心声] ' + text, 'heart', zhText || '');
+    }
   }
 
   // 保存当前游戏状态到 storage（fire-and-forget，不阻塞主流程）
@@ -1848,6 +1878,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           st.debriefs.push({ seat: p.seat, name: p.name, role: p.role, text: text, isUser: p.isUser });
           renderGameOverScreen(container, roche);
         }
+        // 全部复盘生成后，生成全局总结
+        if (werewolfState) {
+          try {
+            st.summary = await generateGameSummary(roche);
+          } catch (e) {
+            appendDebug('system', 'summary', '总结 error: ' + (e && e.message || e));
+            st.summary = '(总结生成失败)';
+          }
+          renderGameOverScreen(container, roche);
+        }
       } finally {
         if (werewolfState) st._debriefInProgress = false;
       }
@@ -1877,9 +1917,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var logHtml = '';
     if (Array.isArray(st.gamelogLines)) {
       st.gamelogLines.forEach(function (line) {
-        if (line.cls === 'heart') return; // 心声不显示
+        if (line.cls === 'heart' && !st.spectator) return; // 心声不显示（旁观模式除外）
         logHtml += formatGamelogLineHTML(line);
       });
+    }
+
+    // 全局总结卡片
+    var summaryHtml = '';
+    if (st.summary) {
+      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
+        '<div style="background:#111128;border:1px solid #1f1f3a;border-radius:10px;padding:12px;margin-bottom:10px;">' +
+        '<div style="font-size:13px;line-height:1.6;color:#e0e0e0;white-space:pre-wrap;">' + esc(st.summary) + '</div>' +
+        '<div style="margin-top:10px;"><button class="mg-btn mg-btn-primary mg-btn-sm" data-action="inject-memory">注入为事实记忆</button></div>' +
+        '</div>';
     }
 
     // 复盘卡片区域
@@ -1891,10 +1941,24 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       debriefHtml = '<div class="mg-phase-label" style="margin-top:18px;">赛后复盘</div>';
       st.debriefs.forEach(function (d) {
         var tag = d.seat + '号 · ' + esc(d.name) + ' · ' + esc(d.role) + (d.isUser ? ' · (你)' : '');
+        var text = d.text || '';
+        var bodyHtml;
+        var marker = '【中文翻译】';
+        var idx = text.indexOf(marker);
+        if (idx !== -1) {
+          var motherTongue = text.substring(0, idx).trim();
+          var zhTrans = text.substring(idx + marker.length).trim();
+          var trId = 'db-tr-' + Math.random().toString(36).slice(2, 8);
+          bodyHtml = '<div style="white-space:pre-wrap;">' + esc(motherTongue) + '</div>' +
+            '<span class="mg-trans-toggle" data-tr="' + trId + '" data-display="block" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-top:6px;display:inline-block;letter-spacing:0.05em;">译</span>' +
+            '<div class="mg-trans-zh" id="' + trId + '" data-display="block" style="display:none;color:#9a8f7a;margin-top:6px;font-style:italic;white-space:pre-wrap;">' + esc(zhTrans) + '</div>';
+        } else {
+          bodyHtml = '<div style="white-space:pre-wrap;">' + esc(text) + '</div>';
+        }
         debriefHtml +=
           '<div style="background:#111128;border:1px solid #1f1f3a;border-radius:10px;padding:12px;margin-bottom:10px;">' +
           '<div style="color:#ffd93d;font-size:12px;margin-bottom:6px;">' + tag + '</div>' +
-          '<div style="font-size:13px;line-height:1.6;color:#e0e0e0;white-space:pre-wrap;">' + esc(d.text) + '</div>' +
+          '<div style="font-size:13px;line-height:1.6;color:#e0e0e0;">' + bodyHtml + '</div>' +
           '</div>';
       });
     }
@@ -1905,7 +1969,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<h1 class="mg-title">狼人杀</h1>' +
       '<div class="mg-actions">' +
       '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
-      '<button class="mg-btn mg-btn-ghost" data-action="debug" title="系统日志">系统日志</button>' +
       '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
       '</div>' +
@@ -1916,6 +1979,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      summaryHtml +
       debriefHtml +
       '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
       '<div class="mg-gamelog" id="ww-gamelog">' + logHtml + '</div>' +
@@ -1934,6 +1998,24 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</div>';
 
     container.innerHTML = html;
+    st._container = container;
+
+    // 双击标题打开系统日志（隐藏入口）
+    var goTitleEl = container.querySelector('.mg-title');
+    if (goTitleEl) {
+      goTitleEl.style.cursor = 'pointer';
+      goTitleEl.title = '双击打开系统日志';
+      goTitleEl.ondblclick = function () {
+        var panel = container.querySelector('#ww-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
 
     var logEl = container.querySelector('#ww-gamelog');
     if (logEl) logEl.scrollTop = logEl.scrollHeight;
@@ -1949,6 +2031,43 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       werewolfState = null;
       showHub(container, roche);
     };
+
+    // 注入为事实记忆
+    var injectBtn = container.querySelector('[data-action="inject-memory"]');
+    if (injectBtn) {
+      injectBtn.onclick = async function () {
+        try {
+          var convId = null;
+          // 优先使用预设的第一个会话
+          if (st.preset && Array.isArray(st.preset.sessions) && st.preset.sessions.length > 0) {
+            convId = st.preset.sessions[0].conversationId;
+          }
+          // 退路：用户当前活动人设的 conversationId
+          if (!convId) {
+            try {
+              var up = await roche.persona.getActiveUserPersona();
+              if (up && up.conversationId) convId = up.conversationId;
+            } catch (e) { /* 忽略 */ }
+          }
+          if (!convId) {
+            roche.ui.toast('未找到会话，注入失败');
+            return;
+          }
+          await roche.memory.write({
+            conversationId: convId,
+            summaryText: st.summary,
+            who: ['用户'],
+            action: '玩了一局狼人杀',
+            when: '刚刚',
+            where: '小游戏插件',
+            source: 'plugin'
+          });
+          roche.ui.toast('已注入事实记忆');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
 
     // 系统日志面板
     var debugBtn = container.querySelector('[data-action="debug"]');
@@ -1980,7 +2099,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           var id = t.getAttribute('data-tr');
           var zh = id ? document.getElementById(id) : null;
           if (zh) {
-            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? 'inline' : 'none';
+            var showDisplay = zh.getAttribute('data-display') || 'inline';
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? showDisplay : 'none';
           }
         }
       });
@@ -2027,6 +2147,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 绝对拒绝矫情、端着、青春伤痛文学。这就只是一场朋友间的线上游戏，不是什么人生大事。\n' +
       '- 必须符合你的人设和说话方式（语气、措辞、节奏、口癖）。游戏不能改变你的说话方式。冷漠的人吐槽也冷漠，话痨的人吐槽也话痨。\n' +
       '- 不要使用游戏套话。把你对这局的真实看法用"你这种人"会说的话表达出来。可以聊自己怎么死的、谁的发言离谱、神职坑不坑、狼人配不配合等。\n' +
+      '- 如果你非中文母语者，请用你的母语写复盘，然后在下面附上中文翻译。格式：先母语原文，空一行，再"【中文翻译】"开头写中文翻译。\n' +
       '- 不要用JSON，直接回复纯文本吐槽，长度50-250字。';
 
     var messages = [
@@ -2036,6 +2157,22 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     appendDebug('prompt', player.name, JSON.stringify(messages, null, 2));
     var br = await roche.ai.chat({ messages: messages, temperature: 0.85 });
     appendDebug('response', player.name, br && br.text ? br.text : '');
+    return (br && br.text) ? br.text.trim() : '(无)';
+  }
+
+  // 生成全局游戏总结（大白话解说，200字以内）
+  async function generateGameSummary(roche) {
+    var st = werewolfState;
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+    var systemContent = '你是狼人杀游戏的解说员。请用大白话总结这局游戏发生了什么，200字以内。包括：胜负方、关键转折、精彩操作、搞笑瞬间。';
+    var userContent = '胜方：' + st.winner + '阵营\n\n【公开事件记录】\n' + publicLogText;
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent }
+    ];
+    appendDebug('prompt', '总结', JSON.stringify(messages, null, 2));
+    var br = await roche.ai.chat({ messages: messages, temperature: 0.7 });
+    appendDebug('response', '总结', br && br.text ? br.text : '');
     return (br && br.text) ? br.text.trim() : '(无)';
   }
 
@@ -2242,6 +2379,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '【人格优先级宣言】\n' +
       '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系——第二身份才是"本局游戏的玩家"。你的说话方式（语气、措辞、节奏、情感温度）是人格的产物，游戏不能改变它。一个冷漠的人即使在带队也依然冷漠；一个话痨即使在划水也依然话痨。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。游戏胜负是次要的，首要是符合你自身人设。说话方式是人格产物，游戏不能改变它。\n' +
       '记忆和人设同等重要。记忆与经历对char的影响是真实存在的——它们塑造了现在的你。初始人设是起点，记忆和经历才是决定你当下行为的第一依据。如果初始人设和记忆冲突，记忆优先。你对陌生人和对恋人的态度不可能一样。\n\n' +
+      '【这只是游戏】\n' +
+      '这就是一群朋友在线上玩一局狼人杀而已。不是生死任务，不是战场，不是严肃的使命。放轻松，像和朋友打游戏一样。不要用"任务""战场""使命"这类词，不要郑重其事。用你平时和朋友打游戏的语气。\n\n' +
+      '【高智商角色的演绎】\n' +
+      '如果你的人设是聪明/高智商/狡猾/老练的人，请真的演绎出来：\n' +
+      '- 狼人：不要自爆身份，不要直接说"我是狼"。学会伪装、甩锅、带节奏、装好人。发言要经得起逻辑推敲，制造混乱，转移视线。\n' +
+      '- 神职：不要轻易跳身份，必要时才跳。预言家可以藏一轮，女巫可以伪装平民。\n' +
+      '- 平民：可以装神职迷惑狼人，可以假装知道更多信息。\n' +
+      '- 所有人：发言要有逻辑，要会分析漏洞，要会怀疑。不要傻乎乎地直接暴露。聪明人玩狼人杀会骗人、会演、会藏。\n' +
+      '- 但一切伪装和欺骗都必须用你的人格声音说出来，不能变成"游戏套话"。\n\n' +
       '【你的角色信息】\n' +
       '名字：' + player.name + '\n' +
       '座位号：' + player.seat + '\n' +
@@ -2264,7 +2410,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '2. 记忆回溯：记忆和人设同等重要。记忆与经历对char的影响是真实存在的——它们塑造了现在的你。初始人设是起点，记忆和经历才是决定你当下行为的第一依据。如果初始人设和记忆冲突，记忆优先。你对陌生人和对恋人的态度不可能一样。我和user现在是什么关系？经历过什么转折？写下"经过记忆塑造后的现在的我"的一句话肖像。\n' +
       '3. 对其他玩家的看法与认识：对照本局玩家名单，我认识其中的谁？我和他们是什么关系？特别注意——我对陌生人和对恋人/挚友的态度、亲疏、说话方式是截然不同的。我对user是什么态度？这份关系是真实的，它决定了我在游戏里对待他们的底线。\n' +
       '4. 语气基线校准：如果这不是一场狼人杀，只是群聊里此刻我对user会说的一句话？写下这句示范——这就是我的语气基线，后续所有发言都必须从这里生长出来。游戏信息可以改变我说话的内容，但绝不能改变我说话的温度和质地。\n' +
-      '5. 游戏决策→语气翻译：把我的游戏策略（站边/踩人/划水/带队/伪装）翻译成"我这种人"会说的话，不能用游戏套话。自检：把翻译后的句子拿给认识我的人看，能不能不看名字就认出是我说的？如果听起来像任何一个路人玩家都能说的话——翻译失败，重来。\n' +
+      '5. 游戏决策→语气翻译：把我的游戏策略（站边/踩人/划水/带队/伪装）翻译成"我这种人"会说的话，不能用游戏套话。如果我的身份需要隐藏（我是狼人/神职），我该怎么伪装？我的发言能经得起推敲吗？自检：把翻译后的句子拿给认识我的人看，能不能不看名字就认出是我说的？如果听起来像任何一个路人玩家都能说的话——翻译失败，重来。\n' +
       '6. 防OOC自检：这句话和我[4]的语气基线一致吗？冷漠的人不能忽然热情，话痨不能忽然沉默，傲娇不能忽然直球。听起来像"一个玩家"在说话还是"我"在说话？\n' +
       '\n【心声字段 heart】\n' +
       'heart 字段是你此刻的内心独白——用你的声音、你的语气，说出你心里的一句话。它不是推理，是你真实的内心活动。一到两句即可。表达你此刻的真实感受/算计/对局势或user的态度。必须符合你的语气。\n' +
@@ -2330,6 +2476,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '【人格优先级宣言】\n' +
       '每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系——第二身份才是"本局游戏的玩家"。角色的说话方式（语气、措辞、节奏、情感温度）是人格的产物，游戏不能改变它。游戏胜负是次要的，首要是符合角色自身人设。绝对禁止角色为了"配合游戏需要"而改变自己的说话方式。\n' +
       '记忆和人设同等重要。记忆与经历对char的影响是真实存在的——它们塑造了现在的你。初始人设是起点，记忆和经历才是决定你当下行为的第一依据。如果初始人设和记忆冲突，记忆优先。你对陌生人和对恋人的态度不可能一样。\n\n' +
+      '【这只是游戏】\n' +
+      '这就是一群朋友在线上玩一局狼人杀而已。不是生死任务，不是战场，不是严肃的使命。放轻松，像和朋友打游戏一样。不要用"任务""战场""使命"这类词，不要郑重其事。用你平时和朋友打游戏的语气。\n\n' +
+      '【高智商角色的演绎】\n' +
+      '如果你的人设是聪明/高智商/狡猾/老练的人，请真的演绎出来：\n' +
+      '- 狼人：不要自爆身份，不要直接说"我是狼"。学会伪装、甩锅、带节奏、装好人。发言要经得起逻辑推敲，制造混乱，转移视线。\n' +
+      '- 神职：不要轻易跳身份，必要时才跳。预言家可以藏一轮，女巫可以伪装平民。\n' +
+      '- 平民：可以装神职迷惑狼人，可以假装知道更多信息。\n' +
+      '- 所有人：发言要有逻辑，要会分析漏洞，要会怀疑。不要傻乎乎地直接暴露。聪明人玩狼人杀会骗人、会演、会藏。\n' +
+      '- 但一切伪装和欺骗都必须用你的人格声音说出来，不能变成"游戏套话"。\n\n' +
       buildPlayerRoster(null, '你(user)') + '\n\n' +
       '【角色列表】\n' + charsInfo + '\n' +
       '【公开事件记录】\n' + publicLogText + '\n' +
@@ -2343,7 +2498,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '2. 记忆回溯：记忆和人设同等重要。记忆与经历对char的影响是真实存在的——它们塑造了现在的你。初始人设是起点，记忆和经历才是决定你当下行为的第一依据。如果初始人设和记忆冲突，记忆优先。你对陌生人和对恋人的态度不可能一样。我和user现在是什么关系？写下"经过记忆塑造后的现在的我"的一句话肖像。\n' +
       '3. 对其他玩家的看法与认识：对照本局玩家名单，我认识其中的谁？我和他们是什么关系？特别注意——我对陌生人和对恋人/挚友的态度、亲疏、说话方式是截然不同的。我对user是什么态度？这份关系是真实的，它决定了我在游戏里对待他们的底线。\n' +
       '4. 语气基线校准：写下我语气基线的示范句，后续发言从这里生长。\n' +
-      '5. 游戏决策→语气翻译：把策略翻译成"我这种人"会说的话，不用游戏套话。自检：不看名字能认出是我说的吗？\n' +
+      '5. 游戏决策→语气翻译：把策略翻译成"我这种人"会说的话，不用游戏套话。如果我的身份需要隐藏（我是狼人/神职），我该怎么伪装？我的发言能经得起推敲吗？自检：不看名字能认出是我说的吗？\n' +
       '6. 防OOC自检：这句话符合我的语气基线吗？冷漠不能忽然热情，话痨不能忽然沉默。\n' +
       '\n【心声字段 heart】\n' +
       'heart 字段是角色此刻的内心独白——用角色的声音、语气，说出心里的一句话。它不是推理，是角色真实的内心活动。一到两句即可。表达此刻的真实感受/算计/对局势或user的态度。必须符合角色的语气。\n' +
@@ -2581,7 +2736,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     // === 守卫阶段 ===
     var guard = st.players.find(function (p) { return p.alive && p.role === '守卫'; });
     if (guard) {
-      if (userPlayer && userPlayer.role === '守卫' && userPlayer.alive) {
+      if (userPlayer && userPlayer.role === '守卫' && userPlayer.alive && !st.spectator) {
         // user 是守卫：选择守护目标（不能连守昨晚的人）
         var guardTargets = st.players.filter(function (p) {
           return p.alive && (st.lastGuardTarget == null || p.seat !== st.lastGuardTarget);
@@ -2655,7 +2810,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     // === 狼人阶段 ===
     if (aliveWolves.length > 0 && aliveNonWolves.length > 0) {
-      if (userPlayer && userPlayer.role === '狼人' && userPlayer.alive) {
+      if (userPlayer && userPlayer.role === '狼人' && userPlayer.alive && !st.spectator) {
         // user 是狼人：显示同伴 → 用户发言 → 同伴讨论 → 选目标
         var fellowWolves = st.players.filter(function (p) {
           return p.role === '狼人' && !p.isUser && p.alive;
@@ -2760,6 +2915,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                   appendDebug('heart', wolf.name, d.heart || '', d.heartZh || '');
                   appendCharHistory(wolf.id, st.day, 'night', 'heart', d.heart || '');
                   appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (d.target || '?') + '号');
+                  if (st.spectator && d.speech) {
+                    appendGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：' + d.speech, 'private', d.speechZh || '');
+                  }
                 }
               });
             }
@@ -2781,6 +2939,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 appendDebug('heart', wolf.name, cd.heart || '', cd.heartZh || '');
                 appendCharHistory(wolf.id, st.day, 'night', 'heart', cd.heart || '');
                 appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (cd.target || '?') + '号');
+                if (st.spectator && cd.speech) {
+                  appendGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：' + cd.speech, 'private', cd.speechZh || '');
+                }
                 if (cd.target != null) {
                   var tt = parseInt(cd.target, 10);
                   if (!isNaN(tt)) {
@@ -2811,7 +2972,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var canSave = !st.witchSaveUsed;
       var canPoison = !st.witchPoisonUsed;
 
-      if (userPlayer && userPlayer.role === '女巫' && userPlayer.alive) {
+      if (userPlayer && userPlayer.role === '女巫' && userPlayer.alive && !st.spectator) {
         // user 是女巫；规则：每晚最多使用一瓶药（解药或毒药，不可兼用）
         var usedPotionThisNight = false;
         if (canSave && victim != null) {
@@ -2916,7 +3077,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     // === 预言家阶段 ===
     var seer = st.players.find(function (p) { return p.alive && p.role === '预言家'; });
     if (seer) {
-      if (userPlayer && userPlayer.role === '预言家' && userPlayer.alive) {
+      if (userPlayer && userPlayer.role === '预言家' && userPlayer.alive && !st.spectator) {
         // user 是预言家
         var seerTargets = st.players.filter(function (p) {
           return p.alive && !p.isUser;
@@ -2983,6 +3144,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           }
         }
       }
+    }
+
+    // 旁观模式：显示所有夜间行动（上帝视角）
+    if (st.spectator) {
+      if (st.nightActions.guardTarget != null) appendGamelog(container, '[守卫] 守护了 ' + st.nightActions.guardTarget + '号', 'private');
+      if (st.nightActions.wolvesTarget != null) appendGamelog(container, '[狼人] 选择击杀 ' + st.nightActions.wolvesTarget + '号', 'private');
+      if (st.nightActions.witchSave) appendGamelog(container, '[女巫] 使用解药', 'private');
+      if (st.nightActions.witchPoisonTarget != null) appendGamelog(container, '[女巫] 毒了 ' + st.nightActions.witchPoisonTarget + '号', 'private');
+      if (st.nightActions.seerCheckTarget != null) appendGamelog(container, '[预言家] 查验 ' + st.nightActions.seerCheckTarget + '号，结果：' + st.nightActions.seerResult, 'private');
     }
 
     // === 结算死亡 ===
@@ -3059,7 +3229,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
       st.speakIndex = seat;
 
-      if (player.isUser) {
+      if (player.isUser && !st.spectator) {
         // user 发言
         var speakResult = await waitForUserInput(container, roche, 'day_speak', { seat: seat });
         var speech = (speakResult && speakResult.speech) || '(无发言)';
@@ -3117,7 +3287,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     // AI char 投票
     for (var i = 0; i < alivePlayers.length; i++) {
       var player = alivePlayers[i];
-      if (player.isUser) continue;
+      if (player.isUser && !st.spectator) continue;
 
       var voteTargets = st.players.filter(function (p) {
         return p.alive && p.seat !== player.seat;
@@ -3146,7 +3316,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     // user 投票
     var userPlayer = st.players.find(function (p) { return p.isUser; });
-    if (userPlayer && userPlayer.alive) {
+    if (userPlayer && userPlayer.alive && !st.spectator) {
       var userVoteTargets = st.players.filter(function (p) {
         return p.alive && p.seat !== userPlayer.seat;
       }).map(function (p) { return p.seat; });
