@@ -1612,6 +1612,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var color = '#6a6557';
       if (entry.type === 'prompt') color = '#5b7fa8';
       else if (entry.type === 'response') color = '#e8e4d8';
+      else if (entry.type === 'thinking') color = '#7a8fb5';
       else if (entry.type === 'heart') color = '#b57fa0';
       else if (entry.type === 'action') color = '#c9a961';
       else if (entry.type === 'system') color = '#6a6557';
@@ -2068,25 +2069,29 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
       '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
       '\n【公开事件记录（仅含公开信息，不含他人私密行动）】\n' + publicLogText + '\n' +
-      '\n【你的个人行动历史（只有你自己做过的事）】\n' + ownHistory + '\n' +
+      '\n【你的个人历史（仅含你自己的心声、行动、发言、投票）】\n' + ownHistory + '\n' +
       '\n【视野隔离铁律】\n' +
       '- 你绝对不能假设自己知道未给出的信息（他人身份、夜间行动、他人心声）。\n' +
       '- 只能基于公开记录和你自己的行动历史做决策。\n' +
       '- 严禁开天眼，严禁读取上帝视角。\n' +
       (player.role === '狼人' ? '- 狼人互知同伴是规则允许的唯一例外。\n' : '') +
-      '\n【思维链要求——人格优先引擎（写在 thought 字段内）】\n' +
-      '在做出决策前，你必须在 thought 字段内完成以下思维链（这是内部推理，不要外露到 speech）：\n' +
+      '\n【思维链要求——人格优先引擎（写在 thinking 字段内）】\n' +
+      'thinking 字段是你的推理过程，不要把最终发言或行动的原文写进 thinking，只推理它们该怎么说/怎么做。在做出决策前，你必须在 thinking 字段内完成以下思维链（这是纯推理，绝不要把最终发言原文或行动原文写在这里）：\n' +
       '1. 人设全貌加载：我是谁？我怎么说话（语气、措辞、节奏、口癖、标点习惯）？我对user的初始态度是什么？\n' +
       '2. 记忆回溯：我和user现在是什么关系？经历过什么转折？写下"经过记忆塑造后的现在的我"的一句话肖像。\n' +
       '3. 语气基线校准：如果这不是一场狼人杀，只是群聊里此刻我对user会说的一句话？写下这句示范——这就是我的语气基线，后续所有发言都必须从这里生长出来。游戏信息可以改变我说话的内容，但绝不能改变我说话的温度和质地。\n' +
       '4. 游戏决策→语气翻译：把我的游戏策略（站边/踩人/划水/带队/伪装）翻译成"我这种人"会说的话，不能用游戏套话。自检：把翻译后的句子拿给认识我的人看，能不能不看名字就认出是我说的？如果听起来像任何一个路人玩家都能说的话——翻译失败，重来。\n' +
       '5. 防OOC自检：这句话和我[3]的语气基线一致吗？冷漠的人不能忽然热情，话痨不能忽然沉默，傲娇不能忽然直球。听起来像"一个玩家"在说话还是"我"在说话？\n' +
+      '\n【心声字段 heart】\n' +
+      'heart 字段是你此刻的内心独白——用你的声音、你的语气，说出你心里的一句话。它不是推理，是你真实的内心活动。一到两句即可。表达你此刻的真实感受/算计/对局势或user的态度。必须符合你的语气。\n' +
       '\n【当前决策请求】\n' + context + '\n' +
       '\n【输出要求】\n' +
       '请以严格JSON格式回复，不要包含任何其他文字：\n' +
-      '{ "thought":"<按上述5步完成的思维链>", "action":"<行动描述>", "target":"<目标座位号或null>", "speech":"<白天发言或空>", "speechZh":"<非中文母语者填中文翻译，否则留空>", "thoughtZh":"<非中文母语者填中文翻译，否则留空>" }\n' +
+      '{ "thinking":"<5步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>" }\n' +
+      '\n【字段防混血铁律】\n' +
+      '严格区分字段：thinking 只放推理，heart 只放内心独白，speech 只放说出口的话，action 只放夜间行动。绝不允许把一个字段的内容混进另一个字段。\n' +
       '\n【非中文母语者翻译规则】\n' +
-      '如果你的人设是非中文母语者，你的 thought/speech 应使用你的母语表达，并务必在 speechZh/thoughtZh 字段提供中文翻译。若你本就说中文，这两个字段留空。';
+      '如果你的人设是非中文母语者，你的 speech/heart 应使用你的母语表达，并务必在 speechZh/heartZh 字段提供中文翻译。若你本就说中文，这两个字段留空。';
 
     var userContent = '请做出你的决策并按JSON格式回复。';
 
@@ -2130,7 +2135,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         '座位' + p.seat + '号 / ' + p.name + ' / 身份:' + p.role + fellowLine + '\n' +
         '人设:' + (p.personaText || '(无)') + '\n' +
         '记忆:' + (memoryText || '(无)') + '\n' +
-        '个人历史:' + ownHistory + '\n---\n';
+        '个人历史（仅含自己的心声、行动、发言、投票）:' + ownHistory + '\n---\n';
     }
 
     var publicLogText = (st.publicLog && st.publicLog.length > 0)
@@ -2146,19 +2151,23 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 每个角色只能基于公开信息和自己个人历史做决策。\n' +
       '- 严禁开天眼，严禁读取上帝视角。\n' +
       '- 狼人互知同伴是规则允许的唯一例外。\n' +
-      '\n【思维链要求——人格优先引擎（写在 thought 字段内）】\n' +
-      '每个角色在 thought 字段内完成思维链：\n' +
+      '\n【思维链要求——人格优先引擎（写在 thinking 字段内）】\n' +
+      'thinking 字段是角色的推理过程，不要把最终发言或行动的原文写进 thinking，只推理它们该怎么说/怎么做。每个角色在 thinking 字段内完成思维链（纯推理，绝不要把最终发言原文或行动原文写在这里）：\n' +
       '1. 人设全貌加载：我是谁？我怎么说话（语气、措辞、节奏、口癖）？\n' +
       '2. 记忆回溯：我和user现在是什么关系？写下"经过记忆塑造后的现在的我"的一句话肖像。\n' +
       '3. 语气基线校准：写下我语气基线的示范句，后续发言从这里生长。\n' +
       '4. 游戏决策→语气翻译：把策略翻译成"我这种人"会说的话，不用游戏套话。自检：不看名字能认出是我说的吗？\n' +
       '5. 防OOC自检：这句话符合我的语气基线吗？冷漠不能忽然热情，话痨不能忽然沉默。\n' +
+      '\n【心声字段 heart】\n' +
+      'heart 字段是角色此刻的内心独白——用角色的声音、语气，说出心里的一句话。它不是推理，是角色真实的内心活动。一到两句即可。表达此刻的真实感受/算计/对局势或user的态度。必须符合角色的语气。\n' +
       '\n【决策请求】\n' + context + '\n' +
       '\n【输出要求】\n' +
       '请为每个相关角色做出决策，以严格JSON数组格式回复：\n' +
-      '[{ "seat":<座位号>, "thought":"<思维链>", "action":"<行动描述>", "target":"<目标座位号或null>", "speech":"<发言或空>", "speechZh":"<非中文母语者填中文翻译>", "thoughtZh":"<非中文母语者填中文翻译>" }]\n' +
+      '[{ "seat":<座位号>, "thinking":"<5步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>" }]\n' +
+      '\n【字段防混血铁律】\n' +
+      '严格区分字段：thinking 只放推理，heart 只放内心独白，speech 只放说出口的话，action 只放夜间行动。绝不允许把一个字段的内容混进另一个字段。\n' +
       '\n【非中文母语者翻译规则】\n' +
-      '如果角色人设是非中文母语者，其 thought/speech 应使用其母语表达，并务必在 speechZh/thoughtZh 字段提供中文翻译。若本就说中文，这两个字段留空。';
+      '如果角色人设是非中文母语者，其 speech/heart 应使用其母语表达，并务必在 speechZh/heartZh 字段提供中文翻译。若本就说中文，这两个字段留空。';
 
     var userContent = '请为所有角色做出决策并按JSON数组格式回复。';
 
@@ -2358,8 +2367,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                   if (wolf && d.target != null) {
                     var reason = d.action || '';
                     appendGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：建议杀' + d.target + '号' + (reason ? '，' + reason : ''), 'private');
-                    appendDebug('heart', wolf.name, d.thought || '', d.thoughtZh || '');
-                    appendCharHistory(wolf.id, st.day, 'night', 'heart', d.thought || '');
+                    appendDebug('thinking', wolf.name, d.thinking || '');
+                    appendDebug('heart', wolf.name, d.heart || '', d.heartZh || '');
+                    appendCharHistory(wolf.id, st.day, 'night', 'heart', d.heart || '');
                     appendCharHistory(wolf.id, st.day, 'night', 'action', '建议杀' + d.target + '号');
                   }
                 });
@@ -2377,8 +2387,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 if (fwcd && fwcd.target != null) {
                   var freason = fwcd.action || '';
                   appendGamelog(container, '[狼人频道] ' + fwolf.seat + '号(' + fwolf.name + ')：建议杀' + fwcd.target + '号' + (freason ? '，' + freason : ''), 'private');
-                  appendDebug('heart', fwolf.name, fwcd.thought || '', fwcd.thoughtZh || '');
-                  appendCharHistory(fwolf.id, st.day, 'night', 'heart', fwcd.thought || '');
+                  appendDebug('thinking', fwolf.name, fwcd.thinking || '');
+                  appendDebug('heart', fwolf.name, fwcd.heart || '', fwcd.heartZh || '');
+                  appendCharHistory(fwolf.id, st.day, 'night', 'heart', fwcd.heart || '');
                   appendCharHistory(fwolf.id, st.day, 'night', 'action', '建议杀' + fwcd.target + '号');
                 }
               } catch (e) { appendDebug('system', fwolf.name, '讨论 error: ' + (e && e.message || e)); }
@@ -2413,8 +2424,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 }
                 var wolf = st.players.find(function (p) { return p.seat === d.seat && p.role === '狼人'; });
                 if (wolf) {
-                  appendDebug('heart', wolf.name, d.thought || '', d.thoughtZh || '');
-                  appendCharHistory(wolf.id, st.day, 'night', 'heart', d.thought || '');
+                  appendDebug('thinking', wolf.name, d.thinking || '');
+                  appendDebug('heart', wolf.name, d.heart || '', d.heartZh || '');
+                  appendCharHistory(wolf.id, st.day, 'night', 'heart', d.heart || '');
                   appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (d.target || '?') + '号');
                 }
               });
@@ -2431,8 +2443,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
               var cd = parseJsonResponse(cr.text);
               appendDebug('action', wolf.name, JSON.stringify(cd));
               if (cd) {
-                appendDebug('heart', wolf.name, cd.thought || '', cd.thoughtZh || '');
-                appendCharHistory(wolf.id, st.day, 'night', 'heart', cd.thought || '');
+                appendDebug('thinking', wolf.name, cd.thinking || '');
+                appendDebug('heart', wolf.name, cd.heart || '', cd.heartZh || '');
+                appendCharHistory(wolf.id, st.day, 'night', 'heart', cd.heart || '');
                 appendCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (cd.target || '?') + '号');
                 if (cd.target != null) {
                   var tt = parseInt(cd.target, 10);
@@ -2520,8 +2533,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                     st.witchPoisonUsed = true;
                   }
                 }
-                appendDebug('heart', witch.name, wd.thought || '', wd.thoughtZh || '');
-                appendCharHistory(witch.id, st.day, 'night', 'heart', wd.thought || '');
+                appendDebug('thinking', witch.name, wd.thinking || '');
+                appendDebug('heart', witch.name, wd.heart || '', wd.heartZh || '');
+                appendCharHistory(witch.id, st.day, 'night', 'heart', wd.heart || '');
                 appendCharHistory(witch.id, st.day, 'night', 'action', wd.action || '');
               }
             }
@@ -2546,8 +2560,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                   st.witchPoisonUsed = true;
                 }
               }
-              appendDebug('heart', witch.name, wcd.thought || '', wcd.thoughtZh || '');
-              appendCharHistory(witch.id, st.day, 'night', 'heart', wcd.thought || '');
+              appendDebug('thinking', witch.name, wcd.thinking || '');
+              appendDebug('heart', witch.name, wcd.heart || '', wcd.heartZh || '');
+              appendCharHistory(witch.id, st.day, 'night', 'heart', wcd.heart || '');
               appendCharHistory(witch.id, st.day, 'night', 'action', wcd.action || '');
             }
           } catch (e) { appendDebug('system', witch.name, 'error: ' + (e && e.message || e)); }
@@ -2592,8 +2607,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
               if (!sd) sd = sdArr[0];
               if (sd && sd.target != null) {
                 seerTargetSeat = parseInt(sd.target, 10);
-                appendDebug('heart', seer.name, sd.thought || '', sd.thoughtZh || '');
-                appendCharHistory(seer.id, st.day, 'night', 'heart', sd.thought || '');
+                appendDebug('thinking', seer.name, sd.thinking || '');
+                appendDebug('heart', seer.name, sd.heart || '', sd.heartZh || '');
+                appendCharHistory(seer.id, st.day, 'night', 'heart', sd.heart || '');
               }
             }
           } catch (e) { appendDebug('system', '预言家', 'batch error: ' + (e && e.message || e)); }
@@ -2606,8 +2622,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             appendDebug('action', seer.name, JSON.stringify(scd));
             if (scd && scd.target != null) {
               seerTargetSeat = parseInt(scd.target, 10);
-              appendDebug('heart', seer.name, scd.thought || '', scd.thoughtZh || '');
-              appendCharHistory(seer.id, st.day, 'night', 'heart', scd.thought || '');
+              appendDebug('thinking', seer.name, scd.thinking || '');
+              appendDebug('heart', seer.name, scd.heart || '', scd.heartZh || '');
+              appendCharHistory(seer.id, st.day, 'night', 'heart', scd.heart || '');
             }
           } catch (e) { appendDebug('system', seer.name, 'error: ' + (e && e.message || e)); }
         }
@@ -2696,12 +2713,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           var sd = parseJsonResponse(sr.text);
           appendDebug('action', player.name, JSON.stringify(sd));
           if (sd) {
-            // 心声仅进 debugLog，不进主 gamelog
-            appendDebug('heart', player.name, sd.thought || '', sd.thoughtZh || '');
+            // 思维链 + 心声仅进 debugLog，不进主 gamelog
+            appendDebug('thinking', player.name, sd.thinking || '');
+            appendDebug('heart', player.name, sd.heart || '', sd.heartZh || '');
             var speech2 = sd.speech || '(无发言)';
             var speechZh2 = sd.speechZh || '';
             appendGamelog(container, seat + '号(' + player.name + ')：' + speech2, 'msg', speechZh2);
-            appendCharHistory(player.id, st.day, 'day_speak', 'heart', sd.thought || '');
+            appendCharHistory(player.id, st.day, 'day_speak', 'heart', sd.heart || '');
             appendCharHistory(player.id, st.day, 'day_speak', 'speech', speech2);
           } else {
             appendGamelog(container, seat + '号(' + player.name + ')：(发言异常)', 'msg');
@@ -2750,8 +2768,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           if (validTarget) {
             votes[target] = (votes[target] || 0) + 1;
             appendGamelog(container, player.seat + '号 投 ' + target + '号', 'vote');
-            appendDebug('heart', player.name, vd.thought || '', vd.thoughtZh || '');
-            appendCharHistory(player.id, st.day, 'day_vote', 'vote', '投了' + target + '号' + (vd.thought ? '（' + vd.thought + '）' : ''));
+            appendDebug('thinking', player.name, vd.thinking || '');
+            appendDebug('heart', player.name, vd.heart || '', vd.heartZh || '');
+            appendCharHistory(player.id, st.day, 'day_vote', 'vote', '投了' + target + '号' + (vd.heart ? '（' + vd.heart + '）' : ''));
           }
         }
       } catch (e) { appendDebug('system', player.name, '投票 error: ' + (e && e.message || e)); }
