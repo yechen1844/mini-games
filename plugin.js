@@ -2668,27 +2668,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var sel = container.querySelector('#summary-conv-select');
         if (!sel || !sel.value) { roche.ui.toast('请先选择会话'); return; }
         try {
-          var opt = sel.options[sel.selectedIndex];
-          var isGroup = opt && opt._isGroup;
-          var contactId = opt && opt._contactId;
-          var convId = sel.value;
-          if (!isGroup) {
-            // 单聊：必须用 char 消息格式，否则不会进入上下文
-            var chars = await roche.character.list();
-            var char = null;
-            if (contactId) {
-              char = chars.find(function (c) { return c.id === contactId; });
-            }
-            if (!char) {
-              char = chars.find(function (c) { return c.conversationId === convId; });
-            }
-            if (!char) { roche.ui.toast('无法找到该单聊对应的角色'); return; }
-            var senderName = char.handle || char.name;
-            await injectMessageToRoche(convId, '【狼人杀游戏总结】\n' + st.gameSummary.summary, 'char', char.id, senderName);
-          } else {
-            // 群聊：系统消息格式
-            await injectMessageToRoche(convId, '【狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
-          }
+          await injectMessageToRoche(sel.value, '【狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
           roche.ui.toast('已注入为消息');
         } catch (e) {
           roche.ui.toast('注入失败: ' + (e && e.message || e));
@@ -4846,6 +4826,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</select>' +
       '</div>' +
       '<div class="mg-field">' +
+      '<label class="mg-label">奖励场景范围</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#e8e4d8;cursor:pointer;"><input type="checkbox" id="xp-char-reward" style="accent-color:#c9a961;" checked> 允许狼人对其他角色（含char）实现XP奖励场景</label>' +
+      '<div class="mg-hint">开启后，获胜的存活狼人可以选择对场上任何角色实现自己的XP；关闭则狼人只能选择不做奖励。无论开关如何，狼人永远可以选择不做。</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
       '<label class="mg-label">心声可见</label>' +
       '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#e8e4d8;cursor:pointer;"><input type="checkbox" id="xp-show-hearts" style="accent-color:#c9a961;"> 开启后，你可以直接看到其他角色的心声（仅你可见）</label>' +
       '<div class="mg-hint">开启后，所有角色的心声会直接显示在游戏日志中，而不是只在系统日志里</div>' +
@@ -5009,6 +4994,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var spectator = false;
       var apiPresetId = container.querySelector('#xp-api-preset') ? container.querySelector('#xp-api-preset').value : '';
       var showHearts = container.querySelector('#xp-show-hearts') ? container.querySelector('#xp-show-hearts').checked : false;
+      var charRewardAllowed = container.querySelector('#xp-char-reward') ? container.querySelector('#xp-char-reward').checked : true;
 
       if (checkedIds.length !== count - 1) {
         roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
@@ -5131,6 +5117,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         preset: preset || null,
         apiPresetId: apiPresetId || null,
         showHearts: !!showHearts,
+        charRewardAllowed: !!charRewardAllowed,
         count: count,
         wolfCount: wolfCount,
         players: allPlayers,
@@ -6814,7 +6801,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         wolfRewardHtml = '<div class="mg-phase-label" style="margin-top:18px;color:#c4788a;">狼人胜利奖励</div>' +
           '<div style="padding:14px 16px;background:linear-gradient(180deg,rgba(122,46,58,0.14) 0%,rgba(13,13,26,0.4) 100%);border:1px solid rgba(139,58,74,0.4);border-radius:3px;">' +
           '<div style="color:#e8e4d8;font-size:13px;line-height:1.7;">存活的狼人：<b style="color:#c4788a;">' + esc(wolfListText) + '</b></div>' +
-          '<div style="color:#8a8578;font-size:12px;margin-top:6px;line-height:1.6;">作为胜利奖励，存活的狼人可以选择对场上一个角色实现自己的XP（情趣场景），也可以选择不做。详见下方角色记忆中的"奖励场景"。</div>' +
+          '<div style="color:#8a8578;font-size:12px;margin-top:6px;line-height:1.6;">' +
+          (st.charRewardAllowed
+            ? '作为胜利奖励，存活的狼人可以选择对场上任意一个角色实现自己的XP（情趣场景，500字以上），也可以选择不做。'
+            : '当前游戏禁止狼人对其他角色实现XP奖励。存活的狼人可以选择不做奖励。') +
+          '详见下方角色记忆中的"奖励场景"。</div>' +
           '</div>';
       }
     }
@@ -7179,27 +7170,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var sel = container.querySelector('#summary-conv-select');
         if (!sel || !sel.value) { roche.ui.toast('请先选择会话'); return; }
         try {
-          var opt = sel.options[sel.selectedIndex];
-          var isGroup = opt && opt._isGroup;
-          var contactId = opt && opt._contactId;
-          var convId = sel.value;
-          if (!isGroup) {
-            // 单聊：必须用 char 消息格式，否则不会进入上下文
-            var chars = await roche.character.list();
-            var char = null;
-            if (contactId) {
-              char = chars.find(function (c) { return c.id === contactId; });
-            }
-            if (!char) {
-              char = chars.find(function (c) { return c.conversationId === convId; });
-            }
-            if (!char) { roche.ui.toast('无法找到该单聊对应的角色'); return; }
-            var senderName = char.handle || char.name;
-            await injectMessageToRoche(convId, '【XP狼人杀游戏总结】\n' + st.gameSummary.summary, 'char', char.id, senderName);
-          } else {
-            // 群聊：系统消息格式
-            await injectMessageToRoche(convId, '【XP狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
-          }
+          await injectMessageToRoche(sel.value, '【XP狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
           roche.ui.toast('已注入为消息');
         } catch (e) {
           roche.ui.toast('注入失败: ' + (e && e.message || e));
@@ -7240,9 +7211,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '7. 包含所有非用户角色\n\n' +
       '特殊规则：\n' +
       '- 如果该角色是狼人且狼人阵营胜利，且该角色存活到最后，在记忆的最后加一段"奖励场景"：\n' +
-      '  该角色可以选择对场上一个角色实现自己的XP（情趣场景）。该角色也可以选择不做。\n' +
+      (st.charRewardAllowed
+        ? '  该角色可以选择对场上任意一个角色（包括其他角色和' + (st.userSeat ? '玩家' : '玩家') + '）实现自己的XP（情趣场景）。\n'
+        : '  当前游戏禁止狼人对其他角色实现XP。该角色只能选择不做奖励。\n') +
+      '  该角色永远可以选择不做奖励（不强制）。如果选择不做，就不要写奖励场景。\n' +
+      '  如果选择做，奖励场景必须500字以上，详细描写情趣互动。\n' +
       '  用该角色的母语写这段奖励场景（如果有memoryZh则提供中文翻译）。\n' +
-      '  格式：在 memory 字段末尾加 "--- 奖励场景 ---\\n" + 场景内容。\n' +
+      '  格式：在 memory 字段末尾加 "--- 奖励场景 ---\\n" + 场景内容（500字以上）。\n' +
       '- 如果该角色是好人或狼人输了，不需要奖励场景。\n\n' +
       '本局结果：' + (st.winner || '未知') + '阵营胜利\n\n' +
       '玩家名单：\n' + roster + '\n' +
@@ -7309,7 +7284,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.13.5",
+    version: "1.14.0",
     apps: [
       {
         id: "mini-games-hub",
