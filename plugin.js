@@ -830,6 +830,71 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   margin-left: 6px;
   font-style: italic;
 }
+
+/* ============================================================
+ * 增强样式 · 视觉细节
+ * ============================================================ */
+.mini-games-root .mg-card {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.mini-games-root .mg-card:hover {
+  border-color: rgba(201,169,97,0.4);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.mini-games-root .mg-btn {
+  transition: all 0.15s ease;
+}
+.mini-games-root .mg-btn:hover {
+  transform: translateY(-1px);
+}
+.mini-games-root .mg-btn:active {
+  transform: translateY(0);
+}
+.mini-games-root .mg-input:focus {
+  border-color: var(--mg-gold);
+  box-shadow: 0 0 0 2px rgba(201,169,97,0.15);
+}
+.mini-games-root .mg-seat-card {
+  transition: all 0.2s ease;
+}
+.mini-games-root .mg-seat-card.dead {
+  opacity: 0.5;
+  filter: grayscale(0.6);
+}
+.mini-games-root .mg-game-over-title {
+  animation: mg-fade-in 0.6s ease;
+}
+@keyframes mg-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.mini-games-root ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.mini-games-root ::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.2);
+}
+.mini-games-root ::-webkit-scrollbar-thumb {
+  background: rgba(201,169,97,0.3);
+  border-radius: 3px;
+}
+.mini-games-root ::-webkit-scrollbar-thumb:hover {
+  background: rgba(201,169,97,0.5);
+}
+.mini-games-root .mg-gamelog {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(201,169,97,0.3) rgba(0,0,0,0.2);
+}
+.mini-games-root .mg-check-item:hover {
+  background: rgba(201,169,97,0.06);
+}
+.mini-games-root .mg-trans-toggle {
+  transition: all 0.15s ease;
+}
+.mini-games-root .mg-trans-toggle:hover {
+  background: rgba(201,169,97,0.15);
+}
 `;
 
   /* ============================================================
@@ -2054,6 +2119,64 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return false;
   }
 
+  // 获胜感言阶段：user 先发言，然后 char 轮询发言
+  // isXp: 是否为 XP 狼人杀（决定使用哪套 state / prompt / gamelog 函数）
+  async function runVictorySpeeches(roche, isXp) {
+    var st = isXp ? xpWerewolfState : werewolfState;
+    if (!st || !st._container) return [];
+    var container = st._container;
+    var speeches = [];
+
+    function logAppend(text, cls, zhText) {
+      if (isXp) appendXpGamelog(container, text, cls, zhText);
+      else appendGamelog(container, text, cls, zhText);
+    }
+
+    // User 先发言（若 user 在场）
+    var userPlayer = st.players.find(function (p) { return p.isUser; });
+    if (userPlayer) {
+      var userRoleLabel = isXp ? xpRoleLabel(userPlayer.role) : userPlayer.role;
+      var userSpeech = null;
+      try {
+        if (isXp) {
+          userSpeech = await waitForXpUserInput(container, roche, 'victory_speech', { winner: st.winner, userRole: userRoleLabel });
+        } else {
+          userSpeech = await waitForUserInput(container, roche, 'victory_speech', { winner: st.winner, userRole: userRoleLabel });
+        }
+      } catch (e) { userSpeech = null; }
+      if (userSpeech && userSpeech.speech) {
+        speeches.push({ name: userPlayer.name, role: userRoleLabel, speech: userSpeech.speech, isUser: true });
+        logAppend('[获胜感言] ' + userPlayer.name + '：' + userSpeech.speech, 'dm');
+      }
+    }
+
+    // 然后每个 char 发言（不分存活/出局）
+    var charPlayers = st.players.filter(function (p) { return !p.isUser; });
+    var priorSpeeches = '';
+    for (var i = 0; i < charPlayers.length; i++) {
+      var p = charPlayers[i];
+      logAppend(p.name + '正在发表感言…', 'transition');
+      try {
+        var roleLabel = isXp ? xpRoleLabel(p.role) : p.role;
+        var context = '游戏结束，' + st.winner + '阵营胜利。你的身份是' + roleLabel + '。' +
+          (p.alive ? '你存活到了最后。' : '你在第' + (p.eliminatedDay || '?') + '天出局。') +
+          '\n请发表你的获胜/失败感言（一两句话即可，用你的人格声音说出）。' +
+          (priorSpeeches ? '\n已有感言：\n' + priorSpeeches : '');
+        var prompt = isXp ? await buildXpCharPrompt(roche, p, context) : await buildCharPrompt(roche, p, context);
+        var result = await aiChat(roche, { messages: prompt.messages, temperature: 0.8 });
+        var parsed = parseJsonResponse(result.text);
+        if (parsed && parsed.speech) {
+          speeches.push({ name: p.name, role: roleLabel, speech: parsed.speech, speechZh: parsed.speechZh || '' });
+          logAppend('[获胜感言] ' + p.name + '：' + parsed.speech, 'dm', parsed.speechZh || '');
+          priorSpeeches += p.name + '：' + parsed.speech + '\n';
+        }
+      } catch (e) {
+        // 单个角色发言失败，跳过
+      }
+    }
+    return speeches;
+  }
+
   // 渲染游戏结束界面（含角色记忆生成）
   async function renderGameOver(container, roche) {
     var st = werewolfState;
@@ -2065,6 +2188,20 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     clearWerewolfSave(roche);
 
     renderGameOverScreen(container, roche);
+
+    // 获胜感言阶段：在生成角色记忆之前进行
+    if (!st.victorySpeeches) {
+      st.victorySpeeches = [];
+      renderGameOverScreen(container, roche); // 显示"获胜感言进行中..."
+      try {
+        if (!werewolfState) return;
+        st.victorySpeeches = await runVictorySpeeches(roche, false);
+      } catch (e) {
+        st.victorySpeeches = [];
+      }
+      if (!werewolfState) return;
+      renderGameOverScreen(container, roche);
+    }
 
     // 若角色记忆尚未生成，单次批量调用生成
     if (!st.charMemories) {
@@ -2112,9 +2249,25 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       });
     }
 
+    // 获胜感言区域
+    var speechesHtml = '';
+    if (st.victorySpeeches && st.victorySpeeches.length > 0) {
+      speechesHtml = '<div class="mg-phase-label" style="margin-top:18px;">获胜感言</div>';
+      st.victorySpeeches.forEach(function (s) {
+        speechesHtml += '<div class="mg-card" style="text-align:left;display:block;padding:12px 16px;margin-bottom:8px;">' +
+          '<div style="font-weight:600;color:' + (s.isUser ? '#d4af37' : '#c9a961') + ';font-family:Georgia,serif;">' + esc(s.name) + (s.isUser ? ' (你)' : '') + '</div>' +
+          '<div style="margin-top:6px;font-size:13px;line-height:1.6;color:#e8e4d8;white-space:pre-wrap;">' + esc(s.speech) + '</div>' +
+          '</div>';
+      });
+    }
+
     // 角色记忆卡片区域
     var memoriesHtml = '';
-    if (!st.charMemories) {
+    if (!st.victorySpeeches && !st.charMemories) {
+      // 获胜感言进行中
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">获胜感言</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">获胜感言进行中...</div>';
+    } else if (!st.charMemories) {
       memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
         '<div class="mg-hint" style="padding:14px;text-align:center;">生成角色记忆中...</div>';
     } else if (st.charMemories.length === 0) {
@@ -2122,6 +2275,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         '<div class="mg-hint" style="padding:14px;text-align:center;">（无角色记忆，可能生成失败）</div>';
     } else {
       memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>';
+      memoriesHtml += '<div style="margin-top:10px;padding:12px 14px;background:rgba(201,169,97,0.08);border:1px solid rgba(201,169,97,0.25);border-radius:3px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">' +
+        '<span style="color:#c9a961;font-size:13px;font-weight:600;letter-spacing:0.04em;">批量注入</span>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-all-dm">全部注入到各自单聊</button>' +
+        '<select class="mg-input" id="batch-group-select" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择群聊...</option></select>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-all-group">全部注入到该群聊</button>' +
+        '</div>';
       st.charMemories.forEach(function (m) {
         var name = m.name || '';
         var role = m.role || '';
@@ -2163,6 +2322,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      speechesHtml +
       memoriesHtml +
       '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
       '<div class="mg-gamelog" id="ww-gamelog">' + logHtml + '</div>' +
@@ -2274,6 +2434,20 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             sel.appendChild(opt);
           });
         });
+        // 同时填充批量注入的群聊下拉
+        var batchSel = container.querySelector('#batch-group-select');
+        if (batchSel) {
+          groupConvs.forEach(function (c) {
+            var cid = c.id || c.conversationId;
+            var label = c.name || c.title || c.handle || cid;
+            var opt = document.createElement('option');
+            opt.value = cid;
+            opt.text = label;
+            opt._isGroup = true;
+            opt._contactId = c.contactId || '';
+            batchSel.appendChild(opt);
+          });
+        }
       }).catch(function () { /* 忽略列表加载失败 */ });
     }
 
@@ -2339,6 +2513,69 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       };
     });
+
+    // 批量注入到各自单聊
+    var injectAllDmBtn = container.querySelector('[data-action="inject-all-dm"]');
+    if (injectAllDmBtn) {
+      injectAllDmBtn.onclick = async function () {
+        if (!st.charMemories || st.charMemories.length === 0) return;
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var done = 0;
+          var total = st.charMemories.length;
+          for (var i = 0; i < total; i++) {
+            var m = st.charMemories[i];
+            var char = chars.find(function (c) { return (c.handle || c.name) === m.name || c.name === m.name; });
+            if (char && char.conversationId) {
+              var memText = m.memory || '';
+              if (m.memoryZh && m.memoryZh.trim() && m.memoryZh !== m.memory) {
+                memText += '\n\n【中文翻译】\n' + m.memoryZh;
+              }
+              roche.ui.toast('正在注入 ' + (i + 1) + '/' + total + '...');
+              await injectMessageToRoche(char.conversationId, '【狼人杀游戏记忆】\n' + memText, 'char', char.id, char.handle || char.name || m.name);
+              done++;
+            }
+          }
+          roche.ui.toast('已注入 ' + done + ' 个角色的单聊记忆');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    // 批量注入到选定群聊
+    var injectAllGroupBtn = container.querySelector('[data-action="inject-all-group"]');
+    if (injectAllGroupBtn) {
+      injectAllGroupBtn.onclick = async function () {
+        if (!st.charMemories || st.charMemories.length === 0) return;
+        var batchSel = container.querySelector('#batch-group-select');
+        var convId = batchSel ? batchSel.value : '';
+        if (!convId) { roche.ui.toast('请先选择群聊'); return; }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var done = 0;
+          var total = st.charMemories.length;
+          for (var i = 0; i < total; i++) {
+            var m = st.charMemories[i];
+            var char = chars.find(function (c) { return (c.handle || c.name) === m.name || c.name === m.name; });
+            var charId = char ? char.id : '';
+            var senderName = char ? (char.handle || char.name || m.name) : m.name;
+            var memText = m.memory || '';
+            if (m.memoryZh && m.memoryZh.trim() && m.memoryZh !== m.memory) {
+              memText += '\n\n【中文翻译】\n' + m.memoryZh;
+            }
+            roche.ui.toast('正在注入 ' + (i + 1) + '/' + total + '...');
+            await injectMessageToRoche(convId, '【狼人杀游戏记忆】\n' + memText, 'char', charId, senderName);
+            done++;
+          }
+          roche.ui.toast('已注入 ' + done + ' 个角色到该群聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
   }
 
   // 为所有非用户角色一次性生成游戏记忆（批量调用，返回数组）
@@ -2781,6 +3018,45 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var prev = werewolfState._pendingResolve;
         werewolfState._pendingResolve = null;
         prev(null);
+      }
+      // 获胜感言：游戏结束界面没有 #ww-action-panel，使用独立 overlay 面板
+      if (promptType === 'victory_speech') {
+        if (werewolfState) werewolfState._pendingResolve = resolve;
+        var vsWinner = (options && options.winner) || '';
+        var vsUserRole = (options && options.userRole) || '';
+        var vsOverlay = document.createElement('div');
+        vsOverlay.id = 'ww-victory-overlay';
+        vsOverlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+        var vsBox = document.createElement('div');
+        vsBox.style.cssText = 'background:#13131f;border:1px solid #c9a961;border-radius:4px;padding:22px;max-width:520px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.6);';
+        vsBox.innerHTML =
+          '<div style="margin-bottom:12px;color:#c9a961;font-size:14px;font-family:Georgia,serif;letter-spacing:0.04em;">游戏结束！' + esc(vsWinner) + '阵营胜利！你的身份是' + esc(vsUserRole) + '。请发表你的感言：</div>' +
+          '<textarea id="ww-victory-input" style="width:100%;min-height:90px;background:#0d0d1a;border:1px solid #2a2a40;border-radius:3px;padding:10px;color:#e8e4d8;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;" placeholder="输入你的获胜/失败感言..."></textarea>' +
+          '<div style="margin-top:12px;text-align:right;">' +
+          '<button class="mg-btn mg-btn-sm mg-btn-primary" id="ww-victory-submit">发表</button>' +
+          '<button class="mg-btn mg-btn-sm mg-btn-ghost" id="ww-victory-skip" style="margin-left:6px;">跳过</button>' +
+          '</div>';
+        vsOverlay.appendChild(vsBox);
+        container.appendChild(vsOverlay);
+        var vsInput = vsBox.querySelector('#ww-victory-input');
+        var vsSubmit = vsBox.querySelector('#ww-victory-submit');
+        var vsSkip = vsBox.querySelector('#ww-victory-skip');
+        if (vsSubmit && vsInput) {
+          vsSubmit.onclick = function () {
+            var text = vsInput.value.trim();
+            if (werewolfState) werewolfState._pendingResolve = null;
+            resolve({ speech: text });
+            vsOverlay.remove();
+          };
+        }
+        if (vsSkip) {
+          vsSkip.onclick = function () {
+            if (werewolfState) werewolfState._pendingResolve = null;
+            resolve({ speech: '' });
+            vsOverlay.remove();
+          };
+        }
+        return;
       }
       var panel = container.querySelector('#ww-action-panel');
       if (!panel) { resolve(null); return; }
@@ -4380,6 +4656,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</select>' +
       '</div>' +
       '<div class="mg-field">' +
+      '<label class="mg-label">心声可见</label>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#e8e4d8;cursor:pointer;"><input type="checkbox" id="xp-show-hearts" style="accent-color:#c9a961;"> 开启后，你可以直接看到其他角色的心声（仅你可见）</label>' +
+      '<div class="mg-hint">开启后，所有角色的心声会直接显示在游戏日志中，而不是只在系统日志里</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
       '<label class="mg-label">API 预设</label>' +
       '<select class="mg-input" id="xp-api-preset"><option value="">加载中...</option></select>' +
       '<div class="mg-hint">选择已配置的 API 预设后，所有 AI 调用将走该 API；不选则使用 Roche 默认 AI。可在「API 设置」中创建预设</div>' +
@@ -4537,6 +4818,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var mode = container.querySelector('#xp-mode').value;
       var spectator = false;
       var apiPresetId = container.querySelector('#xp-api-preset') ? container.querySelector('#xp-api-preset').value : '';
+      var showHearts = container.querySelector('#xp-show-hearts') ? container.querySelector('#xp-show-hearts').checked : false;
 
       if (checkedIds.length !== count - 1) {
         roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
@@ -4658,6 +4940,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         spectator: false,
         preset: preset || null,
         apiPresetId: apiPresetId || null,
+        showHearts: !!showHearts,
         count: count,
         wolfCount: wolfCount,
         players: allPlayers,
@@ -4715,7 +4998,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var logHtml = '';
     if (Array.isArray(st.gamelogLines)) {
       st.gamelogLines.forEach(function (line) {
-        if (line.cls === 'heart' && !st.spectator) return;
+        if (line.cls === 'heart' && !st.spectator && !st.showHearts) return;
         logHtml += formatGamelogLineHTML(line);
       });
     }
@@ -5209,6 +5492,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 作为狼人，你要伪装成好人，分析"谁的XP像狼人"\n' +
       '- 作为好人，你要根据公开的狼人XP和大家的发言推理\n' +
       '- 记住：这是一场情趣游戏，气氛应该是暧昧、有趣的，不是严肃的法庭\n\n' +
+      '【获胜奖励】\n' +
+      '- 如果你是狼人且狼人获胜，你存活到最后，你可以选择对场上一个角色实现你的XP（情趣场景），也可以选择不做。\n' +
+      '- 如果你是好人或狼人输了，没有奖励。\n' +
+      '- 这个奖励不影响游戏过程，只在游戏结束后以记忆形式呈现。\n' +
+      '- 为了获胜奖励，请你认真游戏，努力让自己的阵营胜利。狼人请努力伪装到底，好人请努力推理。\n\n' +
       '【你的角色信息】\n' +
       '名字：' + player.name + '\n' +
       '座位号：' + player.seat + '\n' +
@@ -5321,6 +5609,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 作为狼人，你要伪装成好人，分析"谁的XP像狼人"\n' +
       '- 作为好人，你要根据公开的狼人XP和大家的发言推理\n' +
       '- 记住：这是一场情趣游戏，气氛应该是暧昧、有趣的，不是严肃的法庭\n\n' +
+      '【获胜奖励】\n' +
+      '- 如果你是狼人且狼人获胜，你存活到最后，你可以选择对场上一个角色实现你的XP（情趣场景），也可以选择不做。\n' +
+      '- 如果你是好人或狼人输了，没有奖励。\n' +
+      '- 这个奖励不影响游戏过程，只在游戏结束后以记忆形式呈现。\n' +
+      '- 为了获胜奖励，请你认真游戏，努力让自己的阵营胜利。狼人请努力伪装到底，好人请努力推理。\n\n' +
       buildXpPlayerRoster(null, _bUserName || '你(user)') + '\n\n' +
       '【公开的狼人 XP（打乱顺序，不映射到玩家）】\n' + revealedWolfXpsText + '\n' +
       '\n【已出局玩家及其 XP】\n' + eliminatedText + '\n' +
@@ -5456,6 +5749,45 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var prev = xpWerewolfState._pendingResolve;
         xpWerewolfState._pendingResolve = null;
         prev(null);
+      }
+      // 获胜感言：游戏结束界面没有 #xp-action-panel，使用独立 overlay 面板
+      if (promptType === 'victory_speech') {
+        if (xpWerewolfState) xpWerewolfState._pendingResolve = resolve;
+        var xvsWinner = (options && options.winner) || '';
+        var xvsUserRole = (options && options.userRole) || '';
+        var xvsOverlay = document.createElement('div');
+        xvsOverlay.id = 'xp-victory-overlay';
+        xvsOverlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+        var xvsBox = document.createElement('div');
+        xvsBox.style.cssText = 'background:#13131f;border:1px solid #c9a961;border-radius:4px;padding:22px;max-width:520px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.6);';
+        xvsBox.innerHTML =
+          '<div style="margin-bottom:12px;color:#c9a961;font-size:14px;font-family:Georgia,serif;letter-spacing:0.04em;">游戏结束！' + esc(xvsWinner) + '阵营胜利！你的身份是' + esc(xvsUserRole) + '。请发表你的感言：</div>' +
+          '<textarea id="xp-victory-input" style="width:100%;min-height:90px;background:#0d0d1a;border:1px solid #2a2a40;border-radius:3px;padding:10px;color:#e8e4d8;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;" placeholder="输入你的获胜/失败感言..."></textarea>' +
+          '<div style="margin-top:12px;text-align:right;">' +
+          '<button class="mg-btn mg-btn-sm mg-btn-primary" id="xp-victory-submit">发表</button>' +
+          '<button class="mg-btn mg-btn-sm mg-btn-ghost" id="xp-victory-skip" style="margin-left:6px;">跳过</button>' +
+          '</div>';
+        xvsOverlay.appendChild(xvsBox);
+        container.appendChild(xvsOverlay);
+        var xvsInput = xvsBox.querySelector('#xp-victory-input');
+        var xvsSubmit = xvsBox.querySelector('#xp-victory-submit');
+        var xvsSkip = xvsBox.querySelector('#xp-victory-skip');
+        if (xvsSubmit && xvsInput) {
+          xvsSubmit.onclick = function () {
+            var text = xvsInput.value.trim();
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ speech: text });
+            xvsOverlay.remove();
+          };
+        }
+        if (xvsSkip) {
+          xvsSkip.onclick = function () {
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ speech: '' });
+            xvsOverlay.remove();
+          };
+        }
+        return;
       }
       var panel = container.querySelector('#xp-action-panel');
       if (!panel) { resolve(null); return; }
@@ -6180,6 +6512,20 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     clearXpWerewolfSave(roche);
     renderXpGameOverScreen(container, roche);
 
+    // 获胜感言阶段：在生成角色记忆之前进行
+    if (!st.victorySpeeches) {
+      st.victorySpeeches = [];
+      renderXpGameOverScreen(container, roche); // 显示"获胜感言进行中..."
+      try {
+        if (!xpWerewolfState) return;
+        st.victorySpeeches = await runVictorySpeeches(roche, true);
+      } catch (e) {
+        st.victorySpeeches = [];
+      }
+      if (!xpWerewolfState) return;
+      renderXpGameOverScreen(container, roche);
+    }
+
     if (!st.charMemories) {
       st._debriefInProgress = true;
       st.charMemories = [];
@@ -6219,8 +6565,20 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var logHtml = '';
     if (Array.isArray(st.gamelogLines)) {
       st.gamelogLines.forEach(function (line) {
-        if (line.cls === 'heart' && !st.spectator) return;
+        if (line.cls === 'heart' && !st.spectator && !st.showHearts) return;
         logHtml += formatGamelogLineHTML(line);
+      });
+    }
+
+    // 获胜感言区域
+    var speechesHtml = '';
+    if (st.victorySpeeches && st.victorySpeeches.length > 0) {
+      speechesHtml = '<div class="mg-phase-label" style="margin-top:18px;">获胜感言</div>';
+      st.victorySpeeches.forEach(function (s) {
+        speechesHtml += '<div class="mg-card" style="text-align:left;display:block;padding:12px 16px;margin-bottom:8px;">' +
+          '<div style="font-weight:600;color:' + (s.isUser ? '#d4af37' : '#c9a961') + ';font-family:Georgia,serif;">' + esc(s.name) + (s.isUser ? ' (你)' : '') + '</div>' +
+          '<div style="margin-top:6px;font-size:13px;line-height:1.6;color:#e8e4d8;white-space:pre-wrap;">' + esc(s.speech) + '</div>' +
+          '</div>';
       });
     }
 
@@ -6240,8 +6598,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       }
     }
 
+    // 角色记忆卡片区域
     var memoriesHtml = '';
-    if (!st.charMemories) {
+    if (!st.victorySpeeches && !st.charMemories) {
+      // 获胜感言进行中
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">获胜感言</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">获胜感言进行中...</div>';
+    } else if (!st.charMemories) {
       memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
         '<div class="mg-hint" style="padding:14px;text-align:center;">生成角色记忆中...</div>';
     } else if (st.charMemories.length === 0) {
@@ -6249,6 +6612,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         '<div class="mg-hint" style="padding:14px;text-align:center;">（无角色记忆，可能生成失败）</div>';
     } else {
       memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>';
+      memoriesHtml += '<div style="margin-top:10px;padding:12px 14px;background:rgba(201,169,97,0.08);border:1px solid rgba(201,169,97,0.25);border-radius:3px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">' +
+        '<span style="color:#c9a961;font-size:13px;font-weight:600;letter-spacing:0.04em;">批量注入</span>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-all-dm">全部注入到各自单聊</button>' +
+        '<select class="mg-input" id="batch-group-select" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择群聊...</option></select>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-all-group">全部注入到该群聊</button>' +
+        '</div>';
       st.charMemories.forEach(function (m) {
         var name = m.name || '';
         var role = m.role || '';
@@ -6290,6 +6659,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      speechesHtml +
       wolfRewardHtml +
       memoriesHtml +
       '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
@@ -6386,6 +6756,20 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             sel.appendChild(opt);
           });
         });
+        // 同时填充批量注入的群聊下拉
+        var batchSel = container.querySelector('#batch-group-select');
+        if (batchSel) {
+          groupConvs.forEach(function (c) {
+            var cid = c.id || c.conversationId;
+            var label = c.name || c.title || c.handle || cid;
+            var opt = document.createElement('option');
+            opt.value = cid;
+            opt.text = label;
+            opt._isGroup = true;
+            opt._contactId = c.contactId || '';
+            batchSel.appendChild(opt);
+          });
+        }
       }).catch(function () { /* 忽略 */ });
     }
 
@@ -6450,6 +6834,69 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       };
     });
+
+    // 批量注入到各自单聊
+    var injectAllDmBtn = container.querySelector('[data-action="inject-all-dm"]');
+    if (injectAllDmBtn) {
+      injectAllDmBtn.onclick = async function () {
+        if (!st.charMemories || st.charMemories.length === 0) return;
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var done = 0;
+          var total = st.charMemories.length;
+          for (var i = 0; i < total; i++) {
+            var m = st.charMemories[i];
+            var char = chars.find(function (c) { return (c.handle || c.name) === m.name || c.name === m.name; });
+            if (char && char.conversationId) {
+              var memText = m.memory || '';
+              if (m.memoryZh && m.memoryZh.trim() && m.memoryZh !== m.memory) {
+                memText += '\n\n【中文翻译】\n' + m.memoryZh;
+              }
+              roche.ui.toast('正在注入 ' + (i + 1) + '/' + total + '...');
+              await injectMessageToRoche(char.conversationId, '【XP狼人杀游戏记忆】\n' + memText, 'char', char.id, char.handle || char.name || m.name);
+              done++;
+            }
+          }
+          roche.ui.toast('已注入 ' + done + ' 个角色的单聊记忆');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    // 批量注入到选定群聊
+    var injectAllGroupBtn = container.querySelector('[data-action="inject-all-group"]');
+    if (injectAllGroupBtn) {
+      injectAllGroupBtn.onclick = async function () {
+        if (!st.charMemories || st.charMemories.length === 0) return;
+        var batchSel = container.querySelector('#batch-group-select');
+        var convId = batchSel ? batchSel.value : '';
+        if (!convId) { roche.ui.toast('请先选择群聊'); return; }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var done = 0;
+          var total = st.charMemories.length;
+          for (var i = 0; i < total; i++) {
+            var m = st.charMemories[i];
+            var char = chars.find(function (c) { return (c.handle || c.name) === m.name || c.name === m.name; });
+            var charId = char ? char.id : '';
+            var senderName = char ? (char.handle || char.name || m.name) : m.name;
+            var memText = m.memory || '';
+            if (m.memoryZh && m.memoryZh.trim() && m.memoryZh !== m.memory) {
+              memText += '\n\n【中文翻译】\n' + m.memoryZh;
+            }
+            roche.ui.toast('正在注入 ' + (i + 1) + '/' + total + '...');
+            await injectMessageToRoche(convId, '【XP狼人杀游戏记忆】\n' + memText, 'char', charId, senderName);
+            done++;
+          }
+          roche.ui.toast('已注入 ' + done + ' 个角色到该群聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
   }
 
   // 为所有非用户角色生成游戏记忆（XP 版）
@@ -6553,7 +7000,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.12.2",
+    version: "1.13.0",
     apps: [
       {
         id: "mini-games-hub",
