@@ -881,6 +881,61 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       .replace(/\n/g, '<br>');
   }
 
+  // 将一条消息直接写入 Roche 主数据库（IndexedDB 'Roche_db' 的 messages store）
+  // 用于"短期消息注入"：群聊注入为系统通知，单聊注入为角色消息。
+  // 注意：此写入绕过插件 storage，卸载插件不会清除这些消息。
+  function injectMessageToRoche(conversationId, text, isGroup, contactId) {
+    return new Promise(function (resolve, reject) {
+      try {
+        var req = indexedDB.open('Roche_db');
+        req.onsuccess = function () {
+          var db = req.result;
+          try {
+            var tx = db.transaction('messages', 'readwrite');
+            var store = tx.objectStore('messages');
+            var now = Date.now();
+            var msg;
+            if (isGroup) {
+              // 群聊：注入为系统消息
+              msg = {
+                id: now + Math.floor(Math.random() * 1000),
+                isMe: false,
+                text: text,
+                type: 'system_notice',
+                timestamp: now,
+                conversationId: conversationId,
+                senderId: '__system__',
+                senderName: 'System'
+              };
+            } else {
+              // 单聊：注入为角色消息
+              msg = {
+                id: now + Math.floor(Math.random() * 1000),
+                isMe: false,
+                text: text,
+                senderId: contactId || '',
+                timestamp: now,
+                senderName: '游戏复盘',
+                conversationId: conversationId
+              };
+              if (conversationId.endsWith('_offline')) {
+                msg.isStreaming = false;
+              }
+            }
+            var addReq = store.add(msg);
+            addReq.onsuccess = function () { resolve(addReq.result); };
+            addReq.onerror = function () { reject(addReq.error); };
+          } catch (e) {
+            reject(e);
+          }
+        };
+        req.onerror = function () { reject(req.error); };
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
   // 注入桥接脚本到游戏 HTML
   function prepareGameHtml(html) {
     var bridge = GAME_BRIDGE;
@@ -1309,9 +1364,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var mode = container.querySelector('#ww-mode').value;
       var spectator = container.querySelector('#ww-spectator') ? container.querySelector('#ww-spectator').checked : false;
 
-      if (checkedIds.length !== count - 1) {
-        roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
-        return;
+      if (spectator) {
+        if (checkedIds.length !== count) {
+          roche.ui.toast("旁观模式需要选择 " + count + " 个角色（共 " + count + " 人，你不参与）");
+          return;
+        }
+      } else {
+        if (checkedIds.length !== count - 1) {
+          roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
+          return;
+        }
       }
 
       // 开新局前清除旧存档
@@ -1339,17 +1401,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       }
 
-      // 构建玩家列表（user + chars）
+      // 构建玩家列表（旁观模式：仅 chars；非旁观：user + chars）
       var allPlayers = [];
-      allPlayers.push({
-        id: "user",
-        name: userName,
-        realName: (userPersona && userPersona.name) || "",
-        handle: (userPersona && userPersona.handle) || "",
-        isUser: true,
-        personaText: userPersonaText,
-        avatar: userAvatar
-      });
+      if (!spectator) {
+        allPlayers.push({
+          id: "user",
+          name: userName,
+          realName: (userPersona && userPersona.name) || "",
+          handle: (userPersona && userPersona.handle) || "",
+          isUser: true,
+          personaText: userPersonaText,
+          avatar: userAvatar
+        });
+      }
       charDetails.forEach(function (cd) {
         allPlayers.push({
           id: cd.id,
@@ -1928,7 +1992,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
         '<div style="background:#111128;border:1px solid #1f1f3a;border-radius:10px;padding:12px;margin-bottom:10px;">' +
         '<div style="font-size:13px;line-height:1.6;color:#e0e0e0;white-space:pre-wrap;">' + esc(st.summary) + '</div>' +
-        '<div style="margin-top:10px;"><button class="mg-btn mg-btn-primary mg-btn-sm" data-action="inject-memory">注入为事实记忆</button></div>' +
+        '<div style="margin-top:10px;">' +
+        '<select class="mg-input" id="ww-inject-conv" style="margin-bottom:8px;">' +
+        '<option value="">选择会话...</option>' +
+        '</select>' +
+        '<div>' +
+        '<button class="mg-btn mg-btn-primary mg-btn-sm" data-action="inject-fact">注入为事实记忆</button>' +
+        '<button class="mg-btn mg-btn-sm" data-action="inject-shortterm" style="margin-left:6px;">注入为短期消息</button>' +
+        '</div>' +
+        '<div class="mg-hint" style="margin-top:6px;">短期消息注入会直接写入 Roche 主数据库，卸载插件不会删除。</div>' +
+        '</div>' +
         '</div>';
     }
 
@@ -2032,37 +2105,76 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       showHub(container, roche);
     };
 
-    // 注入为事实记忆
-    var injectBtn = container.querySelector('[data-action="inject-memory"]');
-    if (injectBtn) {
-      injectBtn.onclick = async function () {
+    // 注入面板：会话下拉 + 注入为事实记忆 / 注入为短期消息
+    var convSelect = container.querySelector('#ww-inject-conv');
+    if (convSelect) {
+      // 异步填充会话列表（不阻塞渲染）
+      if (roche.conversation && typeof roche.conversation.list === 'function') {
+        roche.conversation.list().then(function (conversations) {
+          if (!Array.isArray(conversations)) return;
+          conversations.forEach(function (c) {
+            var cid = c.id || c.conversationId;
+            if (!cid) return;
+            var label = (c.isGroup ? '[群] ' : '[单] ') + (c.name || c.title || c.handle || cid);
+            var opt = document.createElement('option');
+            opt.value = cid;
+            opt.text = label;
+            opt._isGroup = !!c.isGroup;
+            opt._contactId = c.contactId || '';
+            convSelect.appendChild(opt);
+          });
+        }).catch(function () { /* 忽略列表加载失败 */ });
+      }
+    }
+
+    // 注入为事实记忆（完整总结写入 summaryText 和 action，避免某些实现只展示 action）
+    var injectFactBtn = container.querySelector('[data-action="inject-fact"]');
+    if (injectFactBtn) {
+      injectFactBtn.onclick = async function () {
+        var convId = convSelect ? convSelect.value : '';
+        if (!convId) { roche.ui.toast('请先选择会话'); return; }
         try {
-          var convId = null;
-          // 优先使用预设的第一个会话
-          if (st.preset && Array.isArray(st.preset.sessions) && st.preset.sessions.length > 0) {
-            convId = st.preset.sessions[0].conversationId;
-          }
-          // 退路：用户当前活动人设的 conversationId
-          if (!convId) {
-            try {
-              var up = await roche.persona.getActiveUserPersona();
-              if (up && up.conversationId) convId = up.conversationId;
-            } catch (e) { /* 忽略 */ }
-          }
-          if (!convId) {
-            roche.ui.toast('未找到会话，注入失败');
-            return;
-          }
+          var fullSummary = st.summary || '(无总结)';
           await roche.memory.write({
             conversationId: convId,
-            summaryText: st.summary,
+            summaryText: fullSummary,
             who: ['用户'],
-            action: '玩了一局狼人杀',
+            action: fullSummary,
             when: '刚刚',
             where: '小游戏插件',
             source: 'plugin'
           });
-          roche.ui.toast('已注入事实记忆');
+          roche.ui.toast('已注入事实记忆到该会话');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    // 注入为短期消息（直接写入 Roche 主数据库 messages store）
+    var injectShortBtn = container.querySelector('[data-action="inject-shortterm"]');
+    if (injectShortBtn) {
+      injectShortBtn.onclick = async function () {
+        var convSelectEl = container.querySelector('#ww-inject-conv');
+        var convId = convSelectEl ? convSelectEl.value : '';
+        if (!convId) { roche.ui.toast('请先选择会话'); return; }
+        var selectedOpt = convSelectEl.options[convSelectEl.selectedIndex];
+        var isGroup = selectedOpt ? !!selectedOpt._isGroup : false;
+        var contactId = selectedOpt ? (selectedOpt._contactId || '') : '';
+        try {
+          var fullSummary = st.summary || '(无总结)';
+          var msgText = '【狼人杀游戏复盘】\n' + fullSummary;
+          // 同时附上所有非用户角色的复盘吐槽，方便在会话中回顾
+          if (st.debriefs && st.debriefs.length > 0) {
+            msgText += '\n\n—— 玩家复盘 ——';
+            st.debriefs.forEach(function (d) {
+              if (!d.isUser) {
+                msgText += '\n[' + d.name + '(' + d.role + ')]: ' + (d.text || '');
+              }
+            });
+          }
+          await injectMessageToRoche(convId, msgText, isGroup, contactId);
+          roche.ui.toast('已注入短期消息到该会话');
         } catch (e) {
           roche.ui.toast('注入失败: ' + (e && e.message || e));
         }
@@ -2160,12 +2272,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return (br && br.text) ? br.text.trim() : '(无)';
   }
 
-  // 生成全局游戏总结（大白话解说，200字以内）
+  // 生成全局游戏总结（大白话解说，300字以内）
   async function generateGameSummary(roche) {
     var st = werewolfState;
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
-    var systemContent = '你是狼人杀游戏的解说员。请用大白话总结这局游戏发生了什么，200字以内。包括：胜负方、关键转折、精彩操作、搞笑瞬间。';
-    var userContent = '胜方：' + st.winner + '阵营\n\n【公开事件记录】\n' + publicLogText;
+    // 把所有玩家的座位、姓名、身份、存活状态一并提供给解说员，确保总结能写清"谁是狼人/神职"
+    var roster = st.players.map(function (p) {
+      return p.seat + '号(' + p.name + ') - ' + p.role + (p.alive ? ' 存活' : ' 出局');
+    }).join('\n');
+    var systemContent = '你是狼人杀游戏的解说员。请详细总结这局狼人杀：1. 谁是狼人，谁是神职 2. 每天发生了什么 3. 关键转折点 4. 胜负结果和原因。用大白话写，300字以内。';
+    var userContent = '胜方：' + st.winner + '阵营\n\n【玩家身份】\n' + roster + '\n\n【公开事件记录】\n' + publicLogText;
     var messages = [
       { role: 'system', content: systemContent },
       { role: 'user', content: userContent }
@@ -2672,8 +2788,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   // 简洁稳健的阶段推进：夜晚 → 白天发言 → 投票 → 循环。
   // 不再依赖旧的阶段完成标记跳过逻辑；恢复语义由各 run 函数顶部的 _resumePhase 检查处理。
   async function startGameLoop(container, roche) {
+    // 安全阀：防止因胜利条件 bug 导致循环无限进行
+    var safetyMaxDays = 20;
     try {
       while (werewolfState && !werewolfState.gameOver) {
+        if (werewolfState.day > safetyMaxDays) {
+          werewolfState.gameOver = true;
+          werewolfState.winner = '平局';
+          appendGamelog(container, '超过最大天数限制(' + safetyMaxDays + ')，强制结束游戏。', 'dm');
+          break;
+        }
         // 夜晚
         await runNight(container, roche);
         if (!werewolfState || werewolfState.gameOver) break;
@@ -2988,8 +3112,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           }
         }
         if (canPoison && !usedPotionThisNight) {
+          // 女巫可毒任意存活玩家（含 user），仅排除女巫自己（不能自毒）
           var poisonTargets = st.players.filter(function (p) {
-            return p.alive && !p.isUser;
+            return p.alive && p.id !== userPlayer.id;
           }).map(function (p) { return p.seat; });
           var poisonResult = await waitForUserInput(container, roche, 'witch_poison', { targets: poisonTargets });
           if (poisonResult && poisonResult.seat) {
@@ -3156,10 +3281,10 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
 
     // === 结算死亡 ===
-    // 狼刀：守卫守护 XOR 女巫救药 → 存活；同守同救（两者同时生效）→ 死
+    // 狼刀：守卫守护或女巫救药任一生效 → 存活
     var guarded = (st.nightActions.guardTarget != null && st.nightActions.guardTarget === st.nightActions.wolvesTarget);
     var saved = st.nightActions.witchSave;
-    var wolfKillHappens = st.nightActions.wolvesTarget != null && ((!guarded && !saved) || (guarded && saved));
+    var wolfKillHappens = st.nightActions.wolvesTarget != null && !guarded && !saved;
     if (wolfKillHappens) {
       var vP = st.players.find(function (p) { return p.seat === st.nightActions.wolvesTarget; });
       if (vP && vP.alive) {
