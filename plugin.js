@@ -1705,6 +1705,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         debugLog: [],
         debriefs: null,
         charMemories: null,
+        gameSummary: null,
         apiPresetId: apiPresetId || null
       };
 
@@ -2203,6 +2204,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       renderGameOverScreen(container, roche);
     }
 
+    // 全局总结
+    if (!st.gameSummary) {
+      renderGameOverScreen(container, roche);
+      try {
+        if (!werewolfState) return;
+        st.gameSummary = await generateGameSummary(roche, false);
+      } catch (e) {
+        st.gameSummary = null;
+      }
+      if (!werewolfState) return;
+      renderGameOverScreen(container, roche);
+    }
+
     // 若角色记忆尚未生成，单次批量调用生成
     if (!st.charMemories) {
       st._debriefInProgress = true;
@@ -2247,6 +2261,23 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (line.cls === 'heart' && !st.spectator) return; // 心声不显示（旁观模式除外）
         logHtml += formatGamelogLineHTML(line);
       });
+    }
+
+    // 全局总结区域
+    var summaryHtml = '';
+    if (st.gameSummary && st.gameSummary.summary) {
+      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
+        '<div class="mg-card" style="text-align:left;display:block;padding:14px 16px;background:linear-gradient(135deg,rgba(201,169,97,0.08) 0%,rgba(13,13,26,0.4) 100%);border-color:rgba(201,169,97,0.3);">' +
+        '<div style="font-size:13px;line-height:1.7;color:#e8e4d8;white-space:pre-wrap;">' + esc(st.gameSummary.summary) + '</div>' +
+        '<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">' +
+        '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-summary-dm">注入为事实记忆</button>' +
+        '<select class="mg-input" id="summary-conv-select" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择会话...</option></select>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-summary-msg">注入为消息</button>' +
+        '</div>' +
+        '</div>';
+    } else if (!st.gameSummary && !st.victorySpeeches && !st.charMemories) {
+      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成全局总结中...</div>';
     }
 
     // 获胜感言区域
@@ -2322,6 +2353,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      summaryHtml +
       speechesHtml +
       memoriesHtml +
       '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
@@ -2576,6 +2608,73 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       };
     }
+
+    // 填充总结会话下拉
+    var summaryConvSel = container.querySelector('#summary-conv-select');
+    if (summaryConvSel && roche.conversation) {
+      roche.conversation.list().then(function (conversations) {
+        if (!Array.isArray(conversations)) return;
+        conversations.forEach(function (c) {
+          var cid = c.id || c.conversationId;
+          if (!cid) return;
+          var prefix = c.isGroup ? '[群]' : '[单]';
+          var label = prefix + ' ' + (c.name || c.title || c.handle || cid);
+          var opt = document.createElement('option');
+          opt.value = cid;
+          opt.text = label;
+          opt._isGroup = !!c.isGroup;
+          opt._contactId = c.contactId || '';
+          summaryConvSel.appendChild(opt);
+        });
+      }).catch(function () {});
+    }
+
+    // 全局总结注入
+    var injectSummaryDmBtn = container.querySelector('[data-action="inject-summary-dm"]');
+    if (injectSummaryDmBtn) {
+      injectSummaryDmBtn.onclick = async function () {
+        if (!st.gameSummary || !st.gameSummary.summary) return;
+        try {
+          var userPersona = await roche.persona.getActiveUserPersona();
+          var convId = userPersona && userPersona.conversationId;
+          if (!convId) {
+            // Try to find any conversation
+            var convs = await roche.conversation.list();
+            if (Array.isArray(convs) && convs.length > 0) {
+              convId = convs[0].id || convs[0].conversationId;
+            }
+          }
+          if (!convId) { roche.ui.toast('未找到可用会话'); return; }
+          await roche.memory.write({
+            conversationId: convId,
+            summaryText: '【狼人杀游戏总结】' + st.gameSummary.summary,
+            who: ['全体玩家'],
+            action: '玩了一局狼人杀',
+            when: '刚刚',
+            where: '狼人杀游戏',
+            source: 'plugin'
+          });
+          roche.ui.toast('已注入为事实记忆');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    var injectSummaryMsgBtn = container.querySelector('[data-action="inject-summary-msg"]');
+    if (injectSummaryMsgBtn) {
+      injectSummaryMsgBtn.onclick = async function () {
+        if (!st.gameSummary || !st.gameSummary.summary) return;
+        var sel = container.querySelector('#summary-conv-select');
+        if (!sel || !sel.value) { roche.ui.toast('请先选择会话'); return; }
+        try {
+          await injectMessageToRoche(sel.value, '【狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
+          roche.ui.toast('已注入为消息');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
   }
 
   // 为所有非用户角色一次性生成游戏记忆（批量调用，返回数组）
@@ -2629,6 +2728,71 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     } catch (e) {
       appendDebug('system', '记忆', 'error: ' + (e && e.message || e));
       return [];
+    }
+  }
+
+  // 生成全局游戏总结（200 字以内，旁观者视角）
+  async function generateGameSummary(roche, isXp) {
+    var st = isXp ? xpWerewolfState : werewolfState;
+    if (!st) return null;
+
+    var roster = st.players.map(function (p) {
+      var roleLabel = isXp ? xpRoleLabel(p.role) : p.role;
+      var extra = isXp ? (' XP:' + (p.xp || '')) : '';
+      return '座位' + p.seat + ': ' + p.name + ' - ' + roleLabel + extra + ' - ' + (p.alive ? '存活' : '出局');
+    }).join('\n');
+
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+
+    var gameName = isXp ? 'XP狼人杀' : '狼人杀';
+    var ruleDesc = isXp
+      ? '每人提交自己的XP（性癖），狼人的XP被公开但匿名。白天讨论投票，淘汰者XP公开，若XP匹配狼人则淘汰狼人，否则好人出局后狼人夜晚击杀。好人全灭狼人胜，狼人全灭好人胜。'
+      : '玩家分为狼人和好人阵营，狼人夜晚击杀好人，好人白天投票淘汰嫌疑人。神职（预言家、女巫、守卫）各有特殊能力。狼人全灭好人胜，好人全灭狼人胜。';
+
+    var revealedInfo = '';
+    if (isXp && st.revealedWolfXps && st.revealedWolfXps.length > 0) {
+      revealedInfo = '\n公开的狼人XP：\n' + st.revealedWolfXps.map(function (xp, i) { return (i + 1) + '. ' + xp; }).join('\n') + '\n';
+    }
+
+    var systemMsg = '请为以下' + gameName + '游戏生成一份全局总结记忆。\n' +
+      '要求：\n' +
+      '1. 说明玩了什么游戏（' + gameName + '）\n' +
+      '2. 用两句话简述游戏规则\n' +
+      '3. 描述游戏经过（每天发生了什么，关键事件，转折点）\n' +
+      '4. 描述结局（谁赢了，怎么赢的）\n' +
+      '5. 全文200字以内，简洁明了，像旁观者的记录\n' +
+      '6. 用中文写\n' +
+      '7. 返回 JSON：{ summary: "总结文本" }\n\n' +
+      '游戏规则参考：' + ruleDesc + '\n\n' +
+      '本局结果：' + (st.winner || '未知') + '阵营胜利，共' + st.day + '天\n\n' +
+      '玩家名单：\n' + roster + '\n' +
+      revealedInfo +
+      '\n公开事件记录：\n' + (publicLogText || '(无)').slice(-4000);
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请生成全局总结，返回 JSON。' }
+    ];
+
+    if (isXp) {
+      appendXpDebug('prompt', '全局总结', JSON.stringify(messages, null, 2));
+    } else {
+      appendDebug('prompt', '全局总结', JSON.stringify(messages, null, 2));
+    }
+
+    try {
+      var br = await aiChat(roche, { messages: messages, temperature: 0.6 });
+      var text = (br && br.text) ? br.text : '';
+      if (isXp) { appendXpDebug('response', '全局总结', text); } else { appendDebug('response', '全局总结', text); }
+      var parsed = parseJsonResponse(text);
+      if (parsed && parsed.summary) {
+        return { summary: parsed.summary };
+      }
+      // Fallback: try to extract any text
+      return { summary: text.slice(0, 500) };
+    } catch (e) {
+      if (isXp) { appendXpDebug('system', '全局总结', 'error: ' + (e && e.message || e)); } else { appendDebug('system', '全局总结', 'error: ' + (e && e.message || e)); }
+      return null;
     }
   }
 
@@ -4961,6 +5125,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         gameLoopRunning: false,
         debugLog: [],
         charMemories: null,
+        gameSummary: null,
         _gamelogScroll: 0,
         _resumePhase: null
       };
@@ -6526,6 +6691,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       renderXpGameOverScreen(container, roche);
     }
 
+    // 全局总结
+    if (!st.gameSummary) {
+      renderXpGameOverScreen(container, roche);
+      try {
+        if (!xpWerewolfState) return;
+        st.gameSummary = await generateGameSummary(roche, true);
+      } catch (e) {
+        st.gameSummary = null;
+      }
+      if (!xpWerewolfState) return;
+      renderXpGameOverScreen(container, roche);
+    }
+
     if (!st.charMemories) {
       st._debriefInProgress = true;
       st.charMemories = [];
@@ -6568,6 +6746,23 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (line.cls === 'heart' && !st.spectator && !st.showHearts) return;
         logHtml += formatGamelogLineHTML(line);
       });
+    }
+
+    // 全局总结区域
+    var summaryHtml = '';
+    if (st.gameSummary && st.gameSummary.summary) {
+      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
+        '<div class="mg-card" style="text-align:left;display:block;padding:14px 16px;background:linear-gradient(135deg,rgba(201,169,97,0.08) 0%,rgba(13,13,26,0.4) 100%);border-color:rgba(201,169,97,0.3);">' +
+        '<div style="font-size:13px;line-height:1.7;color:#e8e4d8;white-space:pre-wrap;">' + esc(st.gameSummary.summary) + '</div>' +
+        '<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">' +
+        '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-summary-dm">注入为事实记忆</button>' +
+        '<select class="mg-input" id="summary-conv-select" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择会话...</option></select>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-summary-msg">注入为消息</button>' +
+        '</div>' +
+        '</div>';
+    } else if (!st.gameSummary && !st.victorySpeeches && !st.charMemories) {
+      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成全局总结中...</div>';
     }
 
     // 获胜感言区域
@@ -6659,6 +6854,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      summaryHtml +
       speechesHtml +
       wolfRewardHtml +
       memoriesHtml +
@@ -6897,6 +7093,73 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       };
     }
+
+    // 填充总结会话下拉
+    var summaryConvSel = container.querySelector('#summary-conv-select');
+    if (summaryConvSel && roche.conversation) {
+      roche.conversation.list().then(function (conversations) {
+        if (!Array.isArray(conversations)) return;
+        conversations.forEach(function (c) {
+          var cid = c.id || c.conversationId;
+          if (!cid) return;
+          var prefix = c.isGroup ? '[群]' : '[单]';
+          var label = prefix + ' ' + (c.name || c.title || c.handle || cid);
+          var opt = document.createElement('option');
+          opt.value = cid;
+          opt.text = label;
+          opt._isGroup = !!c.isGroup;
+          opt._contactId = c.contactId || '';
+          summaryConvSel.appendChild(opt);
+        });
+      }).catch(function () {});
+    }
+
+    // 全局总结注入
+    var injectSummaryDmBtn = container.querySelector('[data-action="inject-summary-dm"]');
+    if (injectSummaryDmBtn) {
+      injectSummaryDmBtn.onclick = async function () {
+        if (!st.gameSummary || !st.gameSummary.summary) return;
+        try {
+          var userPersona = await roche.persona.getActiveUserPersona();
+          var convId = userPersona && userPersona.conversationId;
+          if (!convId) {
+            // Try to find any conversation
+            var convs = await roche.conversation.list();
+            if (Array.isArray(convs) && convs.length > 0) {
+              convId = convs[0].id || convs[0].conversationId;
+            }
+          }
+          if (!convId) { roche.ui.toast('未找到可用会话'); return; }
+          await roche.memory.write({
+            conversationId: convId,
+            summaryText: '【XP狼人杀游戏总结】' + st.gameSummary.summary,
+            who: ['全体玩家'],
+            action: '玩了一局XP狼人杀',
+            when: '刚刚',
+            where: 'XP狼人杀游戏',
+            source: 'plugin'
+          });
+          roche.ui.toast('已注入为事实记忆');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    var injectSummaryMsgBtn = container.querySelector('[data-action="inject-summary-msg"]');
+    if (injectSummaryMsgBtn) {
+      injectSummaryMsgBtn.onclick = async function () {
+        if (!st.gameSummary || !st.gameSummary.summary) return;
+        var sel = container.querySelector('#summary-conv-select');
+        if (!sel || !sel.value) { roche.ui.toast('请先选择会话'); return; }
+        try {
+          await injectMessageToRoche(sel.value, '【XP狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
+          roche.ui.toast('已注入为消息');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
   }
 
   // 为所有非用户角色生成游戏记忆（XP 版）
@@ -7000,7 +7263,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.13.0",
+    version: "1.13.1",
     apps: [
       {
         id: "mini-games-hub",
