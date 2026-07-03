@@ -4827,8 +4827,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</div>' +
       '<div class="mg-field">' +
       '<label class="mg-label">奖励场景范围</label>' +
-      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#e8e4d8;cursor:pointer;"><input type="checkbox" id="xp-char-reward" style="accent-color:#c9a961;" checked> 允许狼人对其他角色（含char）实现XP奖励场景</label>' +
-      '<div class="mg-hint">开启后，获胜的存活狼人可以选择对场上任何角色实现自己的XP；关闭则狼人只能选择不做奖励。无论开关如何，狼人永远可以选择不做。</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#e8e4d8;cursor:pointer;"><input type="checkbox" id="xp-char-reward" style="accent-color:#c9a961;"> 允许狼人对其他角色（含char）实现XP奖励场景</label>' +
+      '<div class="mg-hint">关闭（默认）：狼人只能对玩家实现XP；开启：狼人可以对场上任意角色（含其他char）实现XP。无论开关如何，狼人永远可以选择不做。</div>' +
       '</div>' +
       '<div class="mg-field">' +
       '<label class="mg-label">心声可见</label>' +
@@ -4994,7 +4994,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var spectator = false;
       var apiPresetId = container.querySelector('#xp-api-preset') ? container.querySelector('#xp-api-preset').value : '';
       var showHearts = container.querySelector('#xp-show-hearts') ? container.querySelector('#xp-show-hearts').checked : false;
-      var charRewardAllowed = container.querySelector('#xp-char-reward') ? container.querySelector('#xp-char-reward').checked : true;
+      var charRewardAllowed = container.querySelector('#xp-char-reward') ? container.querySelector('#xp-char-reward').checked : false;
 
       if (checkedIds.length !== count - 1) {
         roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
@@ -5139,6 +5139,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         debugLog: [],
         charMemories: null,
         gameSummary: null,
+        rewardScenes: null,
         _gamelogScroll: 0,
         _resumePhase: null
       };
@@ -6704,6 +6705,20 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       renderXpGameOverScreen(container, roche);
     }
 
+    // 奖励场景阶段：获胜感言之后，狼人获胜时生成
+    if (!st.rewardScenes && st.winner === '狼人') {
+      st.rewardScenes = [];
+      renderXpGameOverScreen(container, roche);
+      try {
+        if (!xpWerewolfState) return;
+        st.rewardScenes = await generateXpRewardScenes(roche);
+      } catch (e) {
+        st.rewardScenes = [];
+      }
+      if (!xpWerewolfState) return;
+      renderXpGameOverScreen(container, roche);
+    }
+
     // 全局总结
     if (!st.gameSummary) {
       renderXpGameOverScreen(container, roche);
@@ -6790,24 +6805,37 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       });
     }
 
-    // 狼人胜利奖励：若狼人胜，展示存活狼人可对所选角色实现XP
+    // 狼人胜利奖励场景
     var wolfRewardHtml = '';
-    if (st.winner === '狼人') {
-      var survivingWolves = st.players.filter(function (p) { return p.role === 'wolf' && p.alive; });
-      if (survivingWolves.length > 0) {
-        var wolfListText = survivingWolves.map(function (p) {
-          return p.seat + '号(' + p.name + ')';
-        }).join('、');
+    if (st.winner === '狼人' && st.rewardScenes) {
+      if (st.rewardScenes.length === 0) {
         wolfRewardHtml = '<div class="mg-phase-label" style="margin-top:18px;color:#c4788a;">狼人胜利奖励</div>' +
-          '<div style="padding:14px 16px;background:linear-gradient(180deg,rgba(122,46,58,0.14) 0%,rgba(13,13,26,0.4) 100%);border:1px solid rgba(139,58,74,0.4);border-radius:3px;">' +
-          '<div style="color:#e8e4d8;font-size:13px;line-height:1.7;">存活的狼人：<b style="color:#c4788a;">' + esc(wolfListText) + '</b></div>' +
-          '<div style="color:#8a8578;font-size:12px;margin-top:6px;line-height:1.6;">' +
-          (st.charRewardAllowed
-            ? '作为胜利奖励，存活的狼人可以选择对场上任意一个角色实现自己的XP（情趣场景，500字以上），也可以选择不做。'
-            : '当前游戏禁止狼人对其他角色实现XP奖励。存活的狼人可以选择不做奖励。') +
-          '详见下方角色记忆中的"奖励场景"。</div>' +
-          '</div>';
+          '<div class="mg-hint" style="padding:14px;text-align:center;">（无奖励场景）</div>';
+      } else {
+        wolfRewardHtml = '<div class="mg-phase-label" style="margin-top:18px;color:#c4788a;">狼人胜利奖励</div>';
+        st.rewardScenes.forEach(function (rs) {
+          var sceneText = rs.scene || '';
+          var sceneZh = rs.sceneZh || '';
+          var trId = 'xprw-tr-' + Math.random().toString(36).slice(2, 8);
+          var transHtml = '';
+          if (sceneZh && sceneZh.trim() && sceneZh !== sceneText) {
+            transHtml = '<span class="mg-trans-toggle" data-tr="' + trId + '" data-display="block" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-top:6px;display:inline-block;">译</span>' +
+              '<div class="mg-trans-zh" id="' + trId + '" data-display="block" style="display:none;color:#9a8f7a;margin-top:6px;font-style:italic;white-space:pre-wrap;">' + esc(sceneZh) + '</div>';
+          }
+          var decisionLabel = rs.decision === 'do' ? '选择实现XP' : '选择不做';
+          var decisionColor = rs.decision === 'do' ? '#c4788a' : '#8a8578';
+          wolfRewardHtml +=
+            '<div class="mg-card" style="text-align:left;display:block;padding:14px 16px;margin-bottom:10px;background:linear-gradient(180deg,rgba(122,46,58,0.10) 0%,rgba(13,13,26,0.4) 100%);">' +
+            '<div style="font-weight:600;color:#c4788a;font-family:Georgia,serif;">' + esc(rs.name || '') + ' <span style="font-size:11px;color:' + decisionColor + ';font-weight:normal;">' + esc(decisionLabel) + '</span></div>' +
+            (rs.thoughts ? '<div style="margin-top:8px;font-size:12px;color:#9a8f7a;line-height:1.6;font-style:italic;white-space:pre-wrap;">' + esc(rs.thoughts) + '</div>' : '') +
+            (sceneText ? '<div style="margin-top:10px;font-size:13px;line-height:1.7;color:#e8e4d8;white-space:pre-wrap;">' + esc(sceneText) + '</div>' : '') +
+            transHtml +
+            '</div>';
+        });
       }
+    } else if (st.winner === '狼人' && !st.rewardScenes && st.victorySpeeches && !st.gameSummary) {
+      wolfRewardHtml = '<div class="mg-phase-label" style="margin-top:18px;color:#c4788a;">狼人胜利奖励</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成奖励场景中...</div>';
     }
 
     // 角色记忆卡片区域
@@ -6871,9 +6899,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
-      summaryHtml +
       speechesHtml +
       wolfRewardHtml +
+      summaryHtml +
       memoriesHtml +
       '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
       '<div class="mg-gamelog" id="xp-gamelog">' + logHtml + '</div>' +
@@ -7179,6 +7207,66 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
   }
 
+  // 生成奖励场景：狼人获胜且存活的狼人，展示最终想法和XP实现
+  async function generateXpRewardScenes(roche) {
+    var st = xpWerewolfState;
+    if (!st || st.winner !== '狼人') return [];
+
+    var survivingWolves = st.players.filter(function (p) {
+      return p.role === 'wolf' && p.alive && !p.isUser;
+    });
+    if (survivingWolves.length === 0) return [];
+
+    var userPlayer = st.players.find(function (p) { return p.isUser; });
+    var userName = userPlayer ? (userPlayer.name || '玩家') : '玩家';
+
+    var charRewardAllowed = !!st.charRewardAllowed;
+    var targetDesc = charRewardAllowed
+      ? '场上任意一个角色（包括其他角色和' + userName + '）'
+      : '仅' + userName + '（不允许对其他角色）';
+
+    var roster = st.players.map(function (p) {
+      return p.seat + '号: ' + p.name + ' - ' + xpRoleLabel(p.role) + ' - XP:' + (p.xp || '') + ' - ' + (p.alive ? '存活' : '出局');
+    }).join('\n');
+
+    var scenes = [];
+    for (var i = 0; i < survivingWolves.length; i++) {
+      var wolf = survivingWolves[i];
+      appendXpGamelog(st._container, wolf.name + '正在思考是否实现自己的XP…', 'transition');
+      renderXpGameOverScreen(st._container, roche);
+      try {
+        var systemMsg = '游戏结束了，你（' + wolf.name + '）是狼人，狼人阵营胜利，你存活到了最后。\n' +
+          '你的XP是：' + (wolf.xp || '(未设定)') + '\n\n' +
+          '作为胜利奖励，你可以选择对' + targetDesc + '实现自己的XP（情趣场景）。\n' +
+          '你也可以选择不做——这不强制。\n\n' +
+          '请先写出你此刻的内心想法（对胜利的感受、对是否实现XP的犹豫或期待），然后做决定。\n\n' +
+          '如果你选择做，请详细描写实现XP的场景（500字以上）。\n' +
+          '如果你选择不做，写出你的理由即可。\n\n' +
+          '用你的母语写（非中文母语者附中文翻译）。\n' +
+          '返回 JSON：{ name: "' + wolf.name + '", thoughts: "内心想法", decision: "do" 或 "skip", scene: "场景内容（如果选择做）", sceneZh: "中文翻译（如果非中文母语）" }\n\n' +
+          '场上玩家：\n' + roster + '\n' +
+          userName + '的信息：' + (userPlayer ? (userPlayer.personaText || userPlayer.bio || '(无)') : '(无)');
+
+        var cp = await buildXpCharPrompt(roche, wolf, systemMsg);
+        var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.8 });
+        appendXpDebug('response', '奖励场景-' + wolf.name, cr.text);
+        var parsed = parseJsonResponse(cr.text);
+        if (parsed) {
+          parsed.name = parsed.name || wolf.name;
+          scenes.push(parsed);
+          if (parsed.decision === 'do' && parsed.scene) {
+            appendXpGamelog(st._container, '[奖励场景] ' + wolf.name + ' 选择实现自己的XP', 'dm');
+          } else {
+            appendXpGamelog(st._container, '[奖励场景] ' + wolf.name + ' 选择不做', 'dm');
+          }
+        }
+      } catch (e) {
+        appendXpDebug('system', '奖励场景-' + wolf.name, 'error: ' + (e && e.message || e));
+      }
+    }
+    return scenes;
+  }
+
   // 为所有非用户角色生成游戏记忆（XP 版）
   async function generateXpCharMemories(roche) {
     var st = xpWerewolfState;
@@ -7209,16 +7297,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '   - memory: 母语记忆（中文母语者就用中文）\n' +
       '   - memoryZh: 中文翻译（中文母语者留空）\n' +
       '7. 包含所有非用户角色\n\n' +
-      '特殊规则：\n' +
-      '- 如果该角色是狼人且狼人阵营胜利，且该角色存活到最后，在记忆的最后加一段"奖励场景"：\n' +
-      (st.charRewardAllowed
-        ? '  该角色可以选择对场上任意一个角色（包括其他角色和' + (st.userSeat ? '玩家' : '玩家') + '）实现自己的XP（情趣场景）。\n'
-        : '  当前游戏禁止狼人对其他角色实现XP。该角色只能选择不做奖励。\n') +
-      '  该角色永远可以选择不做奖励（不强制）。如果选择不做，就不要写奖励场景。\n' +
-      '  如果选择做，奖励场景必须500字以上，详细描写情趣互动。\n' +
-      '  用该角色的母语写这段奖励场景（如果有memoryZh则提供中文翻译）。\n' +
-      '  格式：在 memory 字段末尾加 "--- 奖励场景 ---\\n" + 场景内容（500字以上）。\n' +
-      '- 如果该角色是好人或狼人输了，不需要奖励场景。\n\n' +
       '本局结果：' + (st.winner || '未知') + '阵营胜利\n\n' +
       '玩家名单：\n' + roster + '\n' +
       '需要生成记忆的角色：' + charList + '\n\n' +
@@ -7284,7 +7362,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.14.0",
+    version: "1.14.1",
     apps: [
       {
         id: "mini-games-hub",
