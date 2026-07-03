@@ -1,7 +1,7 @@
 {
   "id": "mini-games",
   "name": "小游戏",
-  "version": "1.12.2",
+  "version": "1.13.0",
   "description": "可扩展的 HTML 小游戏框架，内置狼人杀与XP狼人杀（人设与记忆驱动，支持批量/单个轮询两种 AI 演算模式）与海龟汤占位，支持自定义添加游戏",
   "author": "yechen1844",
   "entry": "https://raw.githubusercontent.com/yechen1844/mini-games/main/plugin.js",
