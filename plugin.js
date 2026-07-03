@@ -26,6 +26,7 @@
    * ============================================================ */
   var STORAGE_KEY = "mini-games-custom-list"; // 自定义游戏列表的 storage key
   var PRESETS_KEY = "mini-games-presets"; // 预设列表的 storage key
+  var API_PRESETS_KEY = "mini-games-api-presets"; // API 预设列表的 storage key
 
   /* ============================================================
    * 内置游戏
@@ -858,6 +859,52 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     await roche.storage.set(PRESETS_KEY, list);
   }
 
+  // 读取 API 预设列表
+  async function getApiPresets(roche) {
+    var list = await roche.storage.get(API_PRESETS_KEY);
+    return Array.isArray(list) ? list : [];
+  }
+
+  // 保存 API 预设列表
+  async function setApiPresets(roche, list) {
+    await roche.storage.set(API_PRESETS_KEY, list);
+  }
+
+  // 测试 API 连接并获取可用模型列表
+  // baseUrl: 如 "https://api.openai.com/v1"
+  // apiKey: 如 "sk-xxx"
+  // 返回模型 id 数组；失败抛错
+  async function fetchModels(baseUrl, apiKey) {
+    var url = baseUrl.replace(/\/$/, '') + '/models';
+    var res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' }
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    var data = await res.json();
+    if (!data.data || !Array.isArray(data.data)) return [];
+    return data.data.map(function (m) { return m.id; }).filter(Boolean).sort();
+  }
+
+  // 统一的 AI 调用封装：如果 werewolfState 选了 API 预设，注入 provider/endpoint/apiKey/model
+  // 否则走默认 roche.ai.chat 行为
+  async function aiChat(roche, options) {
+    var opts = options || {};
+    var st = werewolfState;
+    if (st && st.apiPresetId) {
+      try {
+        var presets = await getApiPresets(roche);
+        var preset = presets.find(function (p) { return p.id === st.apiPresetId; });
+        if (preset) {
+          opts.provider = preset.baseUrl;
+          opts.endpoint = preset.baseUrl.replace(/\/$/, '') + '/chat/completions';
+          opts.apiKey = preset.apiKey;
+          opts.model = preset.model;
+        }
+      } catch (e) { /* 读取预设失败，走默认 */ }
+    }
+    return await roche.ai.chat(opts);
+  }
+
   // 获取所有游戏（内置 + 自定义）
   async function getAllGames(roche) {
     var custom = await getCustomGames(roche);
@@ -882,9 +929,23 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 将一条消息直接写入 Roche 主数据库（IndexedDB 'Roche_db' 的 messages store）
-  // 用于"短期消息注入"：群聊注入为系统通知，单聊注入为角色消息。
+  // 用于"短期消息注入"。
+  // mode: 'system' (系统通知，群聊用) | 'char' (角色消息，单聊/群聊均可用，需传 senderId 和 senderName)
+  // 兼容旧调用：若 mode 为布尔值，则视为 isGroup（true → 'system'，false → 'char'）
   // 注意：此写入绕过插件 storage，卸载插件不会清除这些消息。
-  function injectMessageToRoche(conversationId, text, isGroup, contactId) {
+  function injectMessageToRoche(conversationId, text, mode, senderId, senderName) {
+    // 兼容旧签名 (conversationId, text, isGroup, contactId)
+    var realMode = mode;
+    var realSenderId = senderId;
+    var realSenderName = senderName;
+    if (mode === true) {
+      realMode = 'system';
+    } else if (mode === false) {
+      realMode = 'char';
+      realSenderId = senderId || '';
+      realSenderName = senderName || '游戏复盘';
+    }
+    if (!realSenderName) realSenderName = '游戏复盘';
     return new Promise(function (resolve, reject) {
       try {
         var req = indexedDB.open('Roche_db');
@@ -895,8 +956,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             var store = tx.objectStore('messages');
             var now = Date.now();
             var msg;
-            if (isGroup) {
-              // 群聊：注入为系统消息
+            if (realMode === 'system') {
+              // 系统通知
               msg = {
                 id: now + Math.floor(Math.random() * 1000),
                 isMe: false,
@@ -908,14 +969,14 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 senderName: 'System'
               };
             } else {
-              // 单聊：注入为角色消息
+              // 角色消息（单聊或群聊均以角色身份发送）
               msg = {
                 id: now + Math.floor(Math.random() * 1000),
                 isMe: false,
                 text: text,
-                senderId: contactId || '',
+                senderId: realSenderId || '',
                 timestamp: now,
-                senderName: '游戏复盘',
+                senderName: realSenderName,
                 conversationId: conversationId
               };
               if (conversationId.endsWith('_offline')) {
@@ -963,6 +1024,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<h1 class="mg-title">小游戏</h1>' +
       '<div class="mg-actions">' +
       '<button class="mg-btn mg-btn-ghost" data-action="presets">预设管理</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="api-presets">API 设置</button>' +
       '<button class="mg-btn mg-btn-primary" data-action="add">添加游戏</button>' +
       '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
       '</div>' +
@@ -1001,6 +1063,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     // 绑定事件
     container.querySelector('[data-action="presets"]').onclick = function () {
       showPresets(container, roche);
+    };
+    container.querySelector('[data-action="api-presets"]').onclick = function () {
+      showApiPresets(container, roche);
     };
     container.querySelector('[data-action="add"]').onclick = function () {
       showForm(container, roche, null);
@@ -1228,6 +1293,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<label class="mg-label"><input type="checkbox" id="ww-spectator"> 旁观模式</label>' +
       '<div class="mg-hint">开启后你以第三人称旁观：所有角色由 AI 操控，你以第三人称旁观全场（含心声与夜间行动）</div>' +
       '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">API 预设</label>' +
+      '<select class="mg-input" id="ww-api-preset"><option value="">加载中...</option></select>' +
+      '<div class="mg-hint">选择已配置的 API 预设后，所有 AI 调用将走该 API；不选则使用 Roche 默认 AI。可在「API 设置」中创建预设</div>' +
+      '</div>' +
       '<div class="mg-form-actions">' +
       '<button class="mg-btn mg-btn-primary" data-action="start">开始游戏</button>' +
       '</div>' +
@@ -1302,6 +1372,25 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     });
     presetSel.innerHTML = presetOpts;
 
+    // 加载 API 预设列表到下拉
+    var apiPresetSel = container.querySelector('#ww-api-preset');
+    var wwLoadedApiPresets = [];
+    try {
+      wwLoadedApiPresets = await getApiPresets(roche);
+    } catch (e) {
+      wwLoadedApiPresets = [];
+    }
+    if (!Array.isArray(wwLoadedApiPresets)) wwLoadedApiPresets = [];
+    var apiOpts = '<option value="">（使用 Roche 默认 AI）</option>';
+    wwLoadedApiPresets.forEach(function (p) {
+      apiOpts += '<option value="' + esc(p.id) + '">' + esc(p.name || '未命名') + ' · ' + esc(p.model || '') + '</option>';
+    });
+    apiPresetSel.innerHTML = apiOpts;
+    // 如果当前 werewolfState 已选过预设，恢复选择
+    if (werewolfState && werewolfState.apiPresetId) {
+      apiPresetSel.value = werewolfState.apiPresetId;
+    }
+
     // 预设变化时自动勾选角色
     presetSel.onchange = function () {
       var pid = presetSel.value;
@@ -1363,6 +1452,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var count = parseInt(countSel.value, 10);
       var mode = container.querySelector('#ww-mode').value;
       var spectator = container.querySelector('#ww-spectator') ? container.querySelector('#ww-spectator').checked : false;
+      var apiPresetId = container.querySelector('#ww-api-preset') ? container.querySelector('#ww-api-preset').value : '';
 
       if (spectator) {
         if (checkedIds.length !== count) {
@@ -1502,7 +1592,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         witchPoisonUsed: false,
         gameLoopRunning: false,
         debugLog: [],
-        debriefs: null
+        debriefs: null,
+        charMemories: null,
+        apiPresetId: apiPresetId || null
       };
 
       // 发牌完成后保存初始存档
@@ -1907,58 +1999,37 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return false;
   }
 
-  // 渲染游戏结束界面（含赛后全员复盘）
+  // 渲染游戏结束界面（含角色记忆生成）
   async function renderGameOver(container, roche) {
     var st = werewolfState;
     if (!st) return;
-    // 若复盘正在生成，避免重入
+    // 若记忆正在生成，避免重入
     if (st._debriefInProgress) return;
 
-    // 游戏结束，清除存档（fire-and-forget，不阻塞复盘）
+    // 游戏结束，清除存档（fire-and-forget，不阻塞记忆生成）
     clearWerewolfSave(roche);
 
     renderGameOverScreen(container, roche);
 
-    // 若复盘尚未生成，逐个生成（顺序执行，显示 loading）
-    if (!st.debriefs) {
+    // 若角色记忆尚未生成，单次批量调用生成
+    if (!st.charMemories) {
       st._debriefInProgress = true;
-      st.debriefs = [];
+      st.charMemories = [];
+      renderGameOverScreen(container, roche);
       try {
-        for (var i = 0; i < st.players.length; i++) {
-          if (!werewolfState) return; // 状态已清空
-          var p = st.players[i];
-          var text = '';
-          if (p.isUser) {
-            text = '(你)';
-          } else {
-            try {
-              text = await generateDebriefForChar(roche, p);
-            } catch (e) {
-              appendDebug('system', p.name, '复盘 error: ' + (e && e.message || e));
-              text = '(复盘生成失败)';
-            }
-          }
-          if (!werewolfState) return;
-          st.debriefs.push({ seat: p.seat, name: p.name, role: p.role, text: text, isUser: p.isUser });
-          renderGameOverScreen(container, roche);
-        }
-        // 全部复盘生成后，生成全局总结
-        if (werewolfState) {
-          try {
-            st.summary = await generateGameSummary(roche);
-          } catch (e) {
-            appendDebug('system', 'summary', '总结 error: ' + (e && e.message || e));
-            st.summary = '(总结生成失败)';
-          }
-          renderGameOverScreen(container, roche);
-        }
-      } finally {
-        if (werewolfState) st._debriefInProgress = false;
+        if (!werewolfState) return;
+        st.charMemories = await generateCharMemories(roche);
+      } catch (e) {
+        appendDebug('system', '记忆', 'error: ' + (e && e.message || e));
+        st.charMemories = [];
       }
+      if (!werewolfState) return;
+      renderGameOverScreen(container, roche);
+      st._debriefInProgress = false;
     }
   }
 
-  // 渲染游戏结束界面的静态部分（每次复盘进度更新都重渲染）
+  // 渲染游戏结束界面的静态部分（每次记忆进度更新都重渲染）
   function renderGameOverScreen(container, roche) {
     var st = werewolfState;
     if (!st) return;
@@ -1986,52 +2057,37 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       });
     }
 
-    // 全局总结卡片
-    var summaryHtml = '';
-    if (st.summary) {
-      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
-        '<div style="background:#111128;border:1px solid #1f1f3a;border-radius:10px;padding:12px;margin-bottom:10px;">' +
-        '<div style="font-size:13px;line-height:1.6;color:#e0e0e0;white-space:pre-wrap;">' + esc(st.summary) + '</div>' +
-        '<div style="margin-top:10px;">' +
-        '<select class="mg-input" id="ww-inject-conv" style="margin-bottom:8px;">' +
-        '<option value="">选择会话...</option>' +
-        '</select>' +
-        '<div>' +
-        '<button class="mg-btn mg-btn-primary mg-btn-sm" data-action="inject-fact">注入为事实记忆</button>' +
-        '<button class="mg-btn mg-btn-sm" data-action="inject-shortterm" style="margin-left:6px;">注入为短期消息</button>' +
-        '</div>' +
-        '<div class="mg-hint" style="margin-top:6px;">短期消息注入会直接写入 Roche 主数据库，卸载插件不会删除。</div>' +
-        '</div>' +
-        '</div>';
-    }
-
-    // 复盘卡片区域
-    var debriefHtml = '';
-    if (!st.debriefs) {
-      debriefHtml = '<div class="mg-phase-label" style="margin-top:18px;">赛后复盘</div>' +
-        '<div class="mg-hint" style="padding:14px;text-align:center;">生成复盘中...</div>';
+    // 角色记忆卡片区域
+    var memoriesHtml = '';
+    if (!st.charMemories) {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成角色记忆中...</div>';
+    } else if (st.charMemories.length === 0) {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">（无角色记忆，可能生成失败）</div>';
     } else {
-      debriefHtml = '<div class="mg-phase-label" style="margin-top:18px;">赛后复盘</div>';
-      st.debriefs.forEach(function (d) {
-        var tag = d.seat + '号 · ' + esc(d.name) + ' · ' + esc(d.role) + (d.isUser ? ' · (你)' : '');
-        var text = d.text || '';
-        var bodyHtml;
-        var marker = '【中文翻译】';
-        var idx = text.indexOf(marker);
-        if (idx !== -1) {
-          var motherTongue = text.substring(0, idx).trim();
-          var zhTrans = text.substring(idx + marker.length).trim();
-          var trId = 'db-tr-' + Math.random().toString(36).slice(2, 8);
-          bodyHtml = '<div style="white-space:pre-wrap;">' + esc(motherTongue) + '</div>' +
-            '<span class="mg-trans-toggle" data-tr="' + trId + '" data-display="block" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-top:6px;display:inline-block;letter-spacing:0.05em;">译</span>' +
-            '<div class="mg-trans-zh" id="' + trId + '" data-display="block" style="display:none;color:#9a8f7a;margin-top:6px;font-style:italic;white-space:pre-wrap;">' + esc(zhTrans) + '</div>';
-        } else {
-          bodyHtml = '<div style="white-space:pre-wrap;">' + esc(text) + '</div>';
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>';
+      st.charMemories.forEach(function (m) {
+        var name = m.name || '';
+        var role = m.role || '';
+        var memory = m.memory || '';
+        var memoryZh = m.memoryZh || '';
+        var trId = 'mem-tr-' + Math.random().toString(36).slice(2, 8);
+        var transHtml = '';
+        if (memoryZh && memoryZh.trim() && memoryZh !== memory) {
+          transHtml = '<span class="mg-trans-toggle" data-tr="' + trId + '" data-display="block" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-top:6px;display:inline-block;letter-spacing:0.05em;">译</span>' +
+            '<div class="mg-trans-zh" id="' + trId + '" data-display="block" style="display:none;color:#9a8f7a;margin-top:6px;font-style:italic;white-space:pre-wrap;">' + esc(memoryZh) + '</div>';
         }
-        debriefHtml +=
-          '<div style="background:#111128;border:1px solid #1f1f3a;border-radius:10px;padding:12px;margin-bottom:10px;">' +
-          '<div style="color:#ffd93d;font-size:12px;margin-bottom:6px;">' + tag + '</div>' +
-          '<div style="font-size:13px;line-height:1.6;color:#e0e0e0;">' + bodyHtml + '</div>' +
+        memoriesHtml +=
+          '<div class="mg-card" style="text-align:left;display:block;padding:14px 16px;">' +
+          '<div style="font-weight:600;color:#c9a961;font-family:Georgia,serif;letter-spacing:0.04em;">' + esc(name) + ' (' + esc(role) + ')</div>' +
+          '<div style="margin-top:8px;font-size:13px;line-height:1.6;color:#e8e4d8;white-space:pre-wrap;">' + esc(memory) + '</div>' +
+          transHtml +
+          '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">' +
+          '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-dm" data-name="' + esc(name) + '">注入到单聊</button>' +
+          '<select class="mg-input" data-conv-select="' + esc(name) + '" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择群聊...</option></select>' +
+          '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-group" data-name="' + esc(name) + '">注入到群聊</button>' +
+          '</div>' +
           '</div>';
       });
     }
@@ -2052,8 +2108,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
-      summaryHtml +
-      debriefHtml +
+      memoriesHtml +
       '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
       '<div class="mg-gamelog" id="ww-gamelog">' + logHtml + '</div>' +
       '<div class="mg-form-actions">' +
@@ -2105,82 +2160,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       showHub(container, roche);
     };
 
-    // 注入面板：会话下拉 + 注入为事实记忆 / 注入为短期消息
-    var convSelect = container.querySelector('#ww-inject-conv');
-    if (convSelect) {
-      // 异步填充会话列表（不阻塞渲染）
-      if (roche.conversation && typeof roche.conversation.list === 'function') {
-        roche.conversation.list().then(function (conversations) {
-          if (!Array.isArray(conversations)) return;
-          conversations.forEach(function (c) {
-            var cid = c.id || c.conversationId;
-            if (!cid) return;
-            var label = (c.isGroup ? '[群] ' : '[单] ') + (c.name || c.title || c.handle || cid);
-            var opt = document.createElement('option');
-            opt.value = cid;
-            opt.text = label;
-            opt._isGroup = !!c.isGroup;
-            opt._contactId = c.contactId || '';
-            convSelect.appendChild(opt);
-          });
-        }).catch(function () { /* 忽略列表加载失败 */ });
-      }
-    }
-
-    // 注入为事实记忆（完整总结写入 summaryText 和 action，避免某些实现只展示 action）
-    var injectFactBtn = container.querySelector('[data-action="inject-fact"]');
-    if (injectFactBtn) {
-      injectFactBtn.onclick = async function () {
-        var convId = convSelect ? convSelect.value : '';
-        if (!convId) { roche.ui.toast('请先选择会话'); return; }
-        try {
-          var fullSummary = st.summary || '(无总结)';
-          await roche.memory.write({
-            conversationId: convId,
-            summaryText: fullSummary,
-            who: ['用户'],
-            action: fullSummary,
-            when: '刚刚',
-            where: '小游戏插件',
-            source: 'plugin'
-          });
-          roche.ui.toast('已注入事实记忆到该会话');
-        } catch (e) {
-          roche.ui.toast('注入失败: ' + (e && e.message || e));
-        }
-      };
-    }
-
-    // 注入为短期消息（直接写入 Roche 主数据库 messages store）
-    var injectShortBtn = container.querySelector('[data-action="inject-shortterm"]');
-    if (injectShortBtn) {
-      injectShortBtn.onclick = async function () {
-        var convSelectEl = container.querySelector('#ww-inject-conv');
-        var convId = convSelectEl ? convSelectEl.value : '';
-        if (!convId) { roche.ui.toast('请先选择会话'); return; }
-        var selectedOpt = convSelectEl.options[convSelectEl.selectedIndex];
-        var isGroup = selectedOpt ? !!selectedOpt._isGroup : false;
-        var contactId = selectedOpt ? (selectedOpt._contactId || '') : '';
-        try {
-          var fullSummary = st.summary || '(无总结)';
-          var msgText = '【狼人杀游戏复盘】\n' + fullSummary;
-          // 同时附上所有非用户角色的复盘吐槽，方便在会话中回顾
-          if (st.debriefs && st.debriefs.length > 0) {
-            msgText += '\n\n—— 玩家复盘 ——';
-            st.debriefs.forEach(function (d) {
-              if (!d.isUser) {
-                msgText += '\n[' + d.name + '(' + d.role + ')]: ' + (d.text || '');
-              }
-            });
-          }
-          await injectMessageToRoche(convId, msgText, isGroup, contactId);
-          roche.ui.toast('已注入短期消息到该会话');
-        } catch (e) {
-          roche.ui.toast('注入失败: ' + (e && e.message || e));
-        }
-      };
-    }
-
     // 系统日志面板
     var debugBtn = container.querySelector('[data-action="debug"]');
     if (debugBtn) {
@@ -2218,78 +2197,147 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       });
       container._wwTransDelegation = true;
     }
-  }
 
-  // 为单个 char 生成赛后复盘（纯文本吐槽，非 JSON）
-  async function generateDebriefForChar(roche, player) {
-    var st = werewolfState;
-    var memoryText = await getCharMemoryText(roche, player);
-    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
-    var ownHistory = '(无)';
-    if (st.charHistory[player.id] && st.charHistory[player.id].length > 0) {
-      ownHistory = st.charHistory[player.id].map(function (h) {
-        return '[第' + h.round + '天 ' + h.phase + '] ' + h.content;
-      }).join('\n');
+    // 异步填充每个角色记忆卡片的群聊下拉
+    if (roche.conversation && typeof roche.conversation.list === 'function') {
+      roche.conversation.list().then(function (conversations) {
+        if (!Array.isArray(conversations)) return;
+        var groupConvs = conversations.filter(function (c) {
+          return c.isGroup && (c.id || c.conversationId);
+        });
+        var convSelects = container.querySelectorAll('select[data-conv-select]');
+        convSelects.forEach(function (sel) {
+          // 保留第一个占位 option
+          groupConvs.forEach(function (c) {
+            var cid = c.id || c.conversationId;
+            var label = c.name || c.title || c.handle || cid;
+            var opt = document.createElement('option');
+            opt.value = cid;
+            opt.text = label;
+            opt._isGroup = true;
+            opt._contactId = c.contactId || '';
+            sel.appendChild(opt);
+          });
+        });
+      }).catch(function () { /* 忽略列表加载失败 */ });
     }
 
-    var fellowWolves = '';
-    if (player.role === '狼人') {
-      var wolves = st.players.filter(function (p) {
-        return p.role === '狼人' && p.id !== player.id;
-      });
-      if (wolves.length > 0) {
-        fellowWolves = '你的狼人同伴：' + wolves.map(function (p) { return p.seat + '号(' + p.name + ')'; }).join('、') + '。\n';
-      }
-    }
+    // 注入到单聊：以角色身份注入到该角色的私聊会话
+    var injectDmBtns = container.querySelectorAll('[data-action="inject-dm"]');
+    injectDmBtns.forEach(function (btn) {
+      btn.onclick = async function () {
+        var name = btn.getAttribute('data-name');
+        if (!name) return;
+        var mem = st.charMemories ? st.charMemories.find(function (m) { return m.name === name; }) : null;
+        if (!mem) { roche.ui.toast('未找到该角色的记忆'); return; }
+        var memoryText = mem.memory || '';
+        if (mem.memoryZh && mem.memoryZh.trim() && mem.memoryZh !== mem.memory) {
+          memoryText += '\n\n【中文翻译】\n' + mem.memoryZh;
+        }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var char = chars.find(function (c) {
+            return (c.handle || c.name) === name || c.name === name;
+          });
+          if (!char) { roche.ui.toast('未找到该角色'); return; }
+          if (!char.conversationId) { roche.ui.toast('该角色没有绑定单聊'); return; }
+          var senderName = char.handle || char.name || name;
+          await injectMessageToRoche(char.conversationId, '【狼人杀游戏记忆】\n' + memoryText, 'char', char.id, senderName);
+          roche.ui.toast('已注入到 ' + name + ' 的单聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    });
 
-    var systemContent =
-      '【人格优先级宣言】\n' +
-      '你的第一身份是"一个人"。你的说话方式是人格的产物，游戏不能改变它。游戏胜负是次要的，首要是符合你自身人设。\n\n' +
-      '游戏已经结束了。胜利方：' + st.winner + '阵营。你本局的身份是' + player.role + '。\n\n' +
-      '【你的角色信息】\n名字：' + player.name + '\n座位号：' + player.seat + '\n身份：' + player.role + '\n' +
-      fellowWolves +
-      '\n' + buildPlayerRoster(player.id) + '\n' +
-      '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
-      '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
-      '\n【你的本局行动历史】\n' + ownHistory + '\n' +
-      '\n【公开事件记录】\n' + publicLogText + '\n' +
-      '\n【复盘要求——赛后日常吐槽】\n' +
-      '现在游戏结束了，你和朋友打完了一局线上狼人杀。请以你这个人的口吻，发一条赛后的真实吐槽。\n' +
-      '- 大白话、接地气、真实吐槽。可以大骂、懊恼、大笑、阴阳怪气、互相甩锅。\n' +
-      '- 绝对拒绝矫情、端着、青春伤痛文学。这就只是一场朋友间的线上游戏，不是什么人生大事。\n' +
-      '- 必须符合你的人设和说话方式（语气、措辞、节奏、口癖）。游戏不能改变你的说话方式。冷漠的人吐槽也冷漠，话痨的人吐槽也话痨。\n' +
-      '- 不要使用游戏套话。把你对这局的真实看法用"你这种人"会说的话表达出来。可以聊自己怎么死的、谁的发言离谱、神职坑不坑、狼人配不配合等。\n' +
-      '- 如果你非中文母语者，请用你的母语写复盘，然后在下面附上中文翻译。格式：先母语原文，空一行，再"【中文翻译】"开头写中文翻译。\n' +
-      '- 不要用JSON，直接回复纯文本吐槽，长度50-250字。';
-
-    var messages = [
-      { role: 'system', content: systemContent },
-      { role: 'user', content: '请发你的赛后复盘吐槽。' }
-    ];
-    appendDebug('prompt', player.name, JSON.stringify(messages, null, 2));
-    var br = await roche.ai.chat({ messages: messages, temperature: 0.85 });
-    appendDebug('response', player.name, br && br.text ? br.text : '');
-    return (br && br.text) ? br.text.trim() : '(无)';
+    // 注入到群聊：以角色身份注入到选定的群聊会话
+    var injectGroupBtns = container.querySelectorAll('[data-action="inject-group"]');
+    injectGroupBtns.forEach(function (btn) {
+      btn.onclick = async function () {
+        var name = btn.getAttribute('data-name');
+        if (!name) return;
+        var mem = st.charMemories ? st.charMemories.find(function (m) { return m.name === name; }) : null;
+        if (!mem) { roche.ui.toast('未找到该角色的记忆'); return; }
+        var memoryText = mem.memory || '';
+        if (mem.memoryZh && mem.memoryZh.trim() && mem.memoryZh !== mem.memory) {
+          memoryText += '\n\n【中文翻译】\n' + mem.memoryZh;
+        }
+        // 找到紧邻该按钮的 select（同级父容器内）
+        var parent = btn.parentElement;
+        var sel = parent ? parent.querySelector('select[data-conv-select="' + name.replace(/"/g, '&quot;') + '"]') : null;
+        if (!sel) { roche.ui.toast('请先选择群聊'); return; }
+        var convId = sel.value;
+        if (!convId) { roche.ui.toast('请先选择群聊'); return; }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var char = chars.find(function (c) {
+            return (c.handle || c.name) === name || c.name === name;
+          });
+          var charId = char ? char.id : '';
+          var senderName = char ? (char.handle || char.name || name) : name;
+          await injectMessageToRoche(convId, '【狼人杀游戏记忆】\n' + memoryText, 'char', charId, senderName);
+          roche.ui.toast('已注入到群聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    });
   }
 
-  // 生成全局游戏总结（大白话解说，300字以内）
-  async function generateGameSummary(roche) {
+  // 为所有非用户角色一次性生成游戏记忆（批量调用，返回数组）
+  // 每份记忆以该角色自己的口吻写，像日记/回忆，仅包含该角色视角下应知的信息
+  async function generateCharMemories(roche) {
     var st = werewolfState;
-    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
-    // 把所有玩家的座位、姓名、身份、存活状态一并提供给解说员，确保总结能写清"谁是狼人/神职"
     var roster = st.players.map(function (p) {
-      return p.seat + '号(' + p.name + ') - ' + p.role + (p.alive ? ' 存活' : ' 出局');
+      return '座位' + p.seat + ': ' + p.name + (p.realName ? '(' + p.realName + ')' : '') + ' - ' + p.role + ' - ' + (p.alive ? '存活' : '出局');
     }).join('\n');
-    var systemContent = '你是狼人杀游戏的解说员。请详细总结这局狼人杀：1. 谁是狼人，谁是神职 2. 每天发生了什么 3. 关键转折点 4. 胜负结果和原因。用大白话写，300字以内。';
-    var userContent = '胜方：' + st.winner + '阵营\n\n【玩家身份】\n' + roster + '\n\n【公开事件记录】\n' + publicLogText;
+
+    var charList = st.players.filter(function (p) { return !p.isUser; }).map(function (p) {
+      return p.name + '(' + p.role + ')';
+    }).join(', ');
+
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+
+    var systemMsg = '你是一群角色的记忆记录员。请为以下每个角色生成一份本轮狼人杀游戏的记忆记录。\n' +
+      '要求：\n' +
+      '1. 每份记忆以该角色自己的口吻写，像日记或回忆，不是介绍\n' +
+      '2. 记录该角色视角下经历的事：自己的身份、夜晚行动、白天发言、投票、被杀/被救/被查验等\n' +
+      '3. 该角色只能知道自己该知道的（不要写上帝视角信息）\n' +
+      '4. 用该角色的母语写（如果非中文母语者）\n' +
+      '5. 每份记忆 100-200 字\n' +
+      '6. 返回 JSON 数组，每项 { name, role, memory, memoryZh }\n' +
+      '   - name: 角色名\n' +
+      '   - role: 身份\n' +
+      '   - memory: 母语记忆（中文母语者就用中文）\n' +
+      '   - memoryZh: 中文翻译（中文母语者留空）\n' +
+      '7. 包含所有非用户角色\n\n' +
+      '玩家名单：\n' + roster + '\n' +
+      '需要生成记忆的角色：' + charList + '\n\n' +
+      '公开事件记录：\n' + (publicLogText || '(无)').slice(-3000);
+
+    var userMsg = '请生成这些角色的游戏记忆，返回 JSON 数组。';
+
     var messages = [
-      { role: 'system', content: systemContent },
-      { role: 'user', content: userContent }
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: userMsg }
     ];
-    appendDebug('prompt', '总结', JSON.stringify(messages, null, 2));
-    var br = await roche.ai.chat({ messages: messages, temperature: 0.7 });
-    appendDebug('response', '总结', br && br.text ? br.text : '');
-    return (br && br.text) ? br.text.trim() : '(无)';
+    appendDebug('prompt', '记忆', JSON.stringify(messages, null, 2));
+
+    try {
+      var br = await aiChat(roche, { messages: messages, temperature: 0.7 });
+      var text = (br && br.text) ? br.text : '';
+      appendDebug('response', '记忆', text);
+      var match = text.match(/\[[\s\S]*\]/);
+      if (!match) return [];
+      var arr = JSON.parse(match[0]);
+      if (!Array.isArray(arr)) return [];
+      return arr;
+    } catch (e) {
+      appendDebug('system', '记忆', 'error: ' + (e && e.message || e));
+      return [];
+    }
   }
 
   function sleep(ms) {
@@ -2504,6 +2552,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 平民：可以装神职迷惑狼人，可以假装知道更多信息。\n' +
       '- 所有人：发言要有逻辑，要会分析漏洞，要会怀疑。不要傻乎乎地直接暴露。聪明人玩狼人杀会骗人、会演、会藏。\n' +
       '- 但一切伪装和欺骗都必须用你的人格声音说出来，不能变成"游戏套话"。\n\n' +
+      '【视角转换与节奏控制 — 聪明人的玩法】\n' +
+      '1. 视角转换：如果你是狼人，发言时请以好人视角出发。不要想"狼人该如何"，要想"一个平民/神职此刻会怎么想、怎么说"。你的发言逻辑要建立在"假设我是好人"的基础上。\n' +
+      '2. 节奏控制：聪明人不着急。率先着急的家伙会漏出破绽。\n' +
+      '   - 不要急着站边、不要急着踩人、不要急着跳身份。\n' +
+      '   - 第一天可以观望、可以问问题、可以装糊涂。\n' +
+      '   - 宁可少说，不要乱说。沉默胜过愚蠢的发言。\n' +
+      '3. 深度伪装：如果你是神职需要藏身份，像平民一样发言。如果你是狼人，像一个真正的好人在分析局势。\n' +
+      '4. 情报利用：充分利用公开信息（谁发言可疑、谁投票给谁、谁死了），但不要暴露你知道的比公开信息更多。\n' +
+      '5. 反向思维：聪明的狼人会故意说一些真话来建立可信度，再在关键时刻带偏方向。\n\n' +
       '【你的角色信息】\n' +
       '名字：' + player.name + '\n' +
       '座位号：' + player.seat + '\n' +
@@ -2536,8 +2593,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '{ "thinking":"<6步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>" }\n' +
       '\n【字段防混血铁律】\n' +
       '严格区分字段：thinking 只放推理，heart 只放内心独白，speech 只放说出口的话，action 只放夜间行动。绝不允许把一个字段的内容混进另一个字段。\n' +
-      '\n【非中文母语者翻译规则】\n' +
-      '如果你的人设是非中文母语者，你的 thinking/heart/speech 应使用你的母语表达，并务必在 heartZh/speechZh 字段提供中文翻译（thinking 不需要翻译）。若你本就说中文，heartZh/speechZh 留空。';
+      '\n【母语规则】\n' +
+      '- 仔细阅读你的人设，判断你的母语是什么。德国人用德语，西班牙人用西班牙语，日本人用日语，法国人用法语，俄罗斯人用俄语，等等。\n' +
+      '- 如果人设明确写了国籍/语言/出生地，以那个语言为准。\n' +
+      '- 如果人设没有明确说明，但名字明显是某国人（如德国名字、西班牙名字），用对应语言。\n' +
+      '- 如果实在无法判断，用英语。\n' +
+      '- thinking/heart/speech 全部用你的母语。然后在 heartZh/speechZh 字段提供中文翻译（thinking 不需要翻译）。\n' +
+      '- 如果你的母语就是中文，heartZh/speechZh 留空。';
 
     var userContent = '请做出你的决策并按JSON格式回复。';
 
@@ -2601,6 +2663,15 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 平民：可以装神职迷惑狼人，可以假装知道更多信息。\n' +
       '- 所有人：发言要有逻辑，要会分析漏洞，要会怀疑。不要傻乎乎地直接暴露。聪明人玩狼人杀会骗人、会演、会藏。\n' +
       '- 但一切伪装和欺骗都必须用你的人格声音说出来，不能变成"游戏套话"。\n\n' +
+      '【视角转换与节奏控制 — 聪明人的玩法】\n' +
+      '1. 视角转换：如果你是狼人，发言时请以好人视角出发。不要想"狼人该如何"，要想"一个平民/神职此刻会怎么想、怎么说"。你的发言逻辑要建立在"假设我是好人"的基础上。\n' +
+      '2. 节奏控制：聪明人不着急。率先着急的家伙会漏出破绽。\n' +
+      '   - 不要急着站边、不要急着踩人、不要急着跳身份。\n' +
+      '   - 第一天可以观望、可以问问题、可以装糊涂。\n' +
+      '   - 宁可少说，不要乱说。沉默胜过愚蠢的发言。\n' +
+      '3. 深度伪装：如果你是神职需要藏身份，像平民一样发言。如果你是狼人，像一个真正的好人在分析局势。\n' +
+      '4. 情报利用：充分利用公开信息（谁发言可疑、谁投票给谁、谁死了），但不要暴露你知道的比公开信息更多。\n' +
+      '5. 反向思维：聪明的狼人会故意说一些真话来建立可信度，再在关键时刻带偏方向。\n\n' +
       buildPlayerRoster(null, '你(user)') + '\n\n' +
       '【角色列表】\n' + charsInfo + '\n' +
       '【公开事件记录】\n' + publicLogText + '\n' +
@@ -2624,8 +2695,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '[{ "seat":<座位号>, "thinking":"<6步思维链推理过程。这是纯推理，绝不要把最终发言原文或行动原文写在这里>", "heart":"<心声：用你的人格声音说出的一句内心独白，表达你此刻的真实感受/算计/对局势或user的态度。不是推理，是你心里冒出来的一句话。必须符合你的语气>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>", "action":"<夜间行动描述，如\'选择击杀3号\'\'使用解药救2号\'\'查验5号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>" }]\n' +
       '\n【字段防混血铁律】\n' +
       '严格区分字段：thinking 只放推理，heart 只放内心独白，speech 只放说出口的话，action 只放夜间行动。绝不允许把一个字段的内容混进另一个字段。\n' +
-      '\n【非中文母语者翻译规则】\n' +
-      '如果角色人设是非中文母语者，其 thinking/heart/speech 应使用其母语表达，并务必在 heartZh/speechZh 字段提供中文翻译（thinking 不需要翻译）。若本就说中文，heartZh/speechZh 留空。';
+      '\n【母语规则】\n' +
+      '- 每个角色仔细阅读自己的人设，判断自己的母语是什么。德国人用德语，西班牙人用西班牙语，日本人用日语，法国人用法语，俄罗斯人用俄语，等等。\n' +
+      '- 如果人设明确写了国籍/语言/出生地，以那个语言为准。\n' +
+      '- 如果人设没有明确说明，但名字明显是某国人（如德国名字、西班牙名字），用对应语言。\n' +
+      '- 如果实在无法判断，用英语。\n' +
+      '- thinking/heart/speech 全部用角色的母语。然后在 heartZh/speechZh 字段提供中文翻译（thinking 不需要翻译）。\n' +
+      '- 如果角色的母语就是中文，heartZh/speechZh 留空。';
 
     var userContent = '请为所有角色做出决策并按JSON数组格式回复。';
 
@@ -2883,7 +2959,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var gbp = await buildBatchPrompt(roche, guardContext + ' 仅守卫角色需要行动。');
-            var gbr = await roche.ai.chat({ messages: gbp.messages, temperature: 0.7 });
+            var gbr = await aiChat(roche, { messages: gbp.messages, temperature: 0.7 });
             appendDebug('response', '批量', gbr.text);
             var gdArr = parseJsonResponse(gbr.text);
             appendDebug('action', '批量', JSON.stringify(gdArr, null, 2));
@@ -2906,7 +2982,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         } else {
           try {
             var gcp = await buildCharPrompt(roche, guard, guardContext);
-            var gcr = await roche.ai.chat({ messages: gcp.messages, temperature: 0.7 });
+            var gcr = await aiChat(roche, { messages: gcp.messages, temperature: 0.7 });
             appendDebug('response', guard.name, gcr.text);
             var gcd = parseJsonResponse(gcr.text);
             appendDebug('action', guard.name, JSON.stringify(gcd, null, 2));
@@ -2963,7 +3039,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             var wolfDiscussContext = userMsgForBatch + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言（用你的母语，非中文母语者附 speechZh），target 填建议座位号，action 填简短行动理由。';
             try {
               var wdbp = await buildBatchPrompt(roche, wolfDiscussContext + ' 仅存活的狼人角色需要讨论。');
-              var wdbr = await roche.ai.chat({ messages: wdbp.messages, temperature: 0.7 });
+              var wdbr = await aiChat(roche, { messages: wdbp.messages, temperature: 0.7 });
               appendDebug('response', '批量', wdbr.text);
               var wdArr = parseJsonResponse(wdbr.text);
               appendDebug('action', '批量', JSON.stringify(wdArr, null, 2));
@@ -2990,7 +3066,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 var priorMsgs = wolfChannelMsgs.length > 0 ? '【狼人频道已有发言】\n' + wolfChannelMsgs.join('\n') + '\n' : '';
                 var fwContext = priorMsgs + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言（用你的母语，非中文母语者附 speechZh），target 填建议座位号，action 填简短行动理由。';
                 var fwcp = await buildCharPrompt(roche, fwolf, fwContext);
-                var fwcr = await roche.ai.chat({ messages: fwcp.messages, temperature: 0.7 });
+                var fwcr = await aiChat(roche, { messages: fwcp.messages, temperature: 0.7 });
                 appendDebug('response', fwolf.name, fwcr.text);
                 var fwcd = parseJsonResponse(fwcr.text);
                 appendDebug('action', fwolf.name, JSON.stringify(fwcd, null, 2));
@@ -3023,7 +3099,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var bp = await buildBatchPrompt(roche, '狼人请选择今晚要击杀的目标。所有存活狼人共同决定一个目标。仅狼人角色需要行动。');
-            var br = await roche.ai.chat({ messages: bp.messages, temperature: 0.7 });
+            var br = await aiChat(roche, { messages: bp.messages, temperature: 0.7 });
             appendDebug('response', '批量', br.text);
             var decisions = parseJsonResponse(br.text);
             appendDebug('action', '批量', JSON.stringify(decisions, null, 2));
@@ -3054,7 +3130,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             try {
               var priorMsgs = silentWolfMsgs.length > 0 ? '【狼人频道已有发言】\n' + silentWolfMsgs.join('\n') + '\n' : '';
               var cp = await buildCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（回复座位号）。你和同伴共同决定。');
-              var cr = await roche.ai.chat({ messages: cp.messages, temperature: 0.7 });
+              var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.7 });
               appendDebug('response', wolf.name, cr.text);
               var cd = parseJsonResponse(cr.text);
               appendDebug('action', wolf.name, JSON.stringify(cd, null, 2));
@@ -3138,7 +3214,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var wbp = await buildBatchPrompt(roche, witchContext + ' 仅女巫角色需要行动。');
-            var wbr = await roche.ai.chat({ messages: wbp.messages, temperature: 0.7 });
+            var wbr = await aiChat(roche, { messages: wbp.messages, temperature: 0.7 });
             appendDebug('response', '批量', wbr.text);
             var wdArr = parseJsonResponse(wbr.text);
             appendDebug('action', '批量', JSON.stringify(wdArr, null, 2));
@@ -3170,7 +3246,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         } else {
           try {
             var wcp = await buildCharPrompt(roche, witch, witchContext);
-            var wcr = await roche.ai.chat({ messages: wcp.messages, temperature: 0.7 });
+            var wcr = await aiChat(roche, { messages: wcp.messages, temperature: 0.7 });
             appendDebug('response', witch.name, wcr.text);
             var wcd = parseJsonResponse(wcr.text);
             appendDebug('action', witch.name, JSON.stringify(wcd, null, 2));
@@ -3227,7 +3303,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var sbp = await buildBatchPrompt(roche, seerContext + ' 仅预言家角色需要行动。');
-            var sbr = await roche.ai.chat({ messages: sbp.messages, temperature: 0.7 });
+            var sbr = await aiChat(roche, { messages: sbp.messages, temperature: 0.7 });
             appendDebug('response', '批量', sbr.text);
             var sdArr = parseJsonResponse(sbr.text);
             appendDebug('action', '批量', JSON.stringify(sdArr, null, 2));
@@ -3245,7 +3321,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         } else {
           try {
             var scp = await buildCharPrompt(roche, seer, seerContext);
-            var scr = await roche.ai.chat({ messages: scp.messages, temperature: 0.7 });
+            var scr = await aiChat(roche, { messages: scp.messages, temperature: 0.7 });
             appendDebug('response', seer.name, scr.text);
             var scd = parseJsonResponse(scr.text);
             appendDebug('action', seer.name, JSON.stringify(scd, null, 2));
@@ -3365,7 +3441,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var speakContext = '现在是白天发言环节。请基于你的身份、人设、记忆和场上公开信息进行发言。发言要符合你的角色人格，不要使用游戏套话。请在speech字段给出你的发言内容。';
         try {
           var sp = await buildCharPrompt(roche, player, speakContext);
-          var sr = await roche.ai.chat({ messages: sp.messages, temperature: 0.7 });
+          var sr = await aiChat(roche, { messages: sp.messages, temperature: 0.7 });
           appendDebug('response', player.name, sr.text);
           var sd = parseJsonResponse(sr.text);
           appendDebug('action', player.name, JSON.stringify(sd, null, 2));
@@ -3421,7 +3497,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var voteContext = '现在是投票阶段。请选择你要投出局的玩家（在target字段回复座位号）。可选目标：' + voteTargets.join(', ');
       try {
         var vp = await buildCharPrompt(roche, player, voteContext);
-        var vr = await roche.ai.chat({ messages: vp.messages, temperature: 0.7 });
+        var vr = await aiChat(roche, { messages: vp.messages, temperature: 0.7 });
         appendDebug('response', player.name, vr.text);
         var vd = parseJsonResponse(vr.text);
         appendDebug('action', player.name, JSON.stringify(vd, null, 2));
@@ -3885,6 +3961,244 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       await setPresets(roche, list);
       roche.ui.toast('已保存');
       showPresets(container, roche);
+    };
+  }
+
+  /* ============================================================
+   * 视图：API 预设管理
+   * ============================================================ */
+  async function showApiPresets(container, roche) {
+    var presets = await getApiPresets(roche);
+
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">API 设置</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
+      '<button class="mg-btn mg-btn-primary" data-action="new">新建 API 预设</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">';
+
+    if (presets.length === 0) {
+      html +=
+        '<div class="mg-empty">' +
+        '<div class="mg-empty-icon"></div>' +
+        '<div>还没有 API 预设，点击右上角「新建 API 预设」创建</div>' +
+        '</div>';
+    } else {
+      presets.forEach(function (p) {
+        var modelDisplay = p.model ? esc(p.model) : '(未选择模型)';
+        var baseUrlDisplay = p.baseUrl ? esc(p.baseUrl) : '(未设置)';
+        html +=
+          '<div class="mg-preset-row" data-id="' + esc(p.id) + '">' +
+          '<div class="mg-preset-info">' +
+          '<p class="mg-preset-name">' + esc(p.name || '未命名') + '</p>' +
+          '<div class="mg-preset-summary">BaseURL: ' + baseUrlDisplay + ' · 模型: ' + modelDisplay + '</div>' +
+          '</div>' +
+          '<div class="mg-preset-actions">' +
+          '<button class="mg-btn mg-btn-ghost mg-btn-sm" data-action="edit" data-id="' + esc(p.id) + '">编辑</button>' +
+          '<button class="mg-btn mg-btn-danger mg-btn-sm" data-action="delete" data-id="' + esc(p.id) + '">删除</button>' +
+          '</div>' +
+          '</div>';
+      });
+    }
+
+    html += '</div></div>';
+
+    container.innerHTML = html;
+
+    container.querySelector('[data-action="back"]').onclick = function () {
+      showHub(container, roche);
+    };
+    container.querySelector('[data-action="new"]').onclick = function () {
+      showApiPresetForm(container, roche, null);
+    };
+
+    var editBtns = container.querySelectorAll('[data-action="edit"]');
+    editBtns.forEach(function (btn) {
+      btn.onclick = function () {
+        var id = btn.dataset.id;
+        var existing = presets.find(function (p) { return p.id === id; });
+        if (existing) showApiPresetForm(container, roche, existing);
+      };
+    });
+
+    var delBtns = container.querySelectorAll('[data-action="delete"]');
+    delBtns.forEach(function (btn) {
+      btn.onclick = async function () {
+        var id = btn.dataset.id;
+        var existing = presets.find(function (p) { return p.id === id; });
+        if (!existing) return;
+        var ok = await roche.ui.confirm({
+          title: '删除 API 预设',
+          message: '确定删除「' + (existing.name || '未命名') + '」？'
+        });
+        if (!ok) return;
+        var list = await getApiPresets(roche);
+        list = list.filter(function (p) { return p.id !== id; });
+        await setApiPresets(roche, list);
+        roche.ui.toast('已删除');
+        showApiPresets(container, roche);
+      };
+    });
+  }
+
+  /* ============================================================
+   * 视图：API 预设表单（新建 / 编辑）
+   * ============================================================ */
+  async function showApiPresetForm(container, roche, existing) {
+    var isEdit = !!existing;
+
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">' + (isEdit ? '编辑 API 预设' : '新建 API 预设') + '</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">' +
+      '<div class="mg-form-wrap">' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">预设名称</label>' +
+      '<input class="mg-input" id="mg-api-name" value="' + esc(existing ? existing.name : '') + '" placeholder="例如：我的 OpenAI">' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">API Base URL</label>' +
+      '<input class="mg-input" id="mg-api-baseurl" value="' + esc(existing ? existing.baseUrl : '') + '" placeholder="https://api.openai.com/v1">' +
+      '<div class="mg-hint">OpenAI 兼容接口的根地址，例如 https://api.openai.com/v1</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">API Key</label>' +
+      '<input class="mg-input" id="mg-api-key" type="password" value="' + esc(existing ? existing.apiKey : '') + '" placeholder="sk-xxx">' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">模型</label>' +
+      '<select class="mg-input" id="mg-api-model"><option value="">' + (existing && existing.model ? esc(existing.model) : '请先测试连接或手动输入') + '</option></select>' +
+      '<input class="mg-input" id="mg-api-model-manual" style="margin-top:8px;" value="' + (existing ? esc(existing.model || '') : '') + '" placeholder="也可手动输入模型名（回填此处）">' +
+      '<div class="mg-hint">点击下方按钮测试连接并自动获取可用模型列表</div>' +
+      '</div>' +
+      '<div class="mg-form-actions" style="justify-content:flex-start;">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="test">测试连接并获取模型</button>' +
+      '<span id="mg-api-test-status" style="margin-left:10px;font-size:12px;color:#8a8578;"></span>' +
+      '</div>' +
+      '<div class="mg-form-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="cancel">取消</button>' +
+      '<button class="mg-btn mg-btn-primary" data-action="save">保存</button>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    container.innerHTML = html;
+
+    container.querySelector('[data-action="back"]').onclick = function () {
+      showApiPresets(container, roche);
+    };
+    container.querySelector('[data-action="cancel"]').onclick = function () {
+      showApiPresets(container, roche);
+    };
+
+    // 缓存的模型列表（用于后续保存时取值）
+    var cachedModels = (existing && Array.isArray(existing.models)) ? existing.models.slice() : [];
+    var modelSel = container.querySelector('#mg-api-model');
+    var modelManual = container.querySelector('#mg-api-model-manual');
+
+    // 初始化下拉：若已有缓存模型列表，回填
+    function rebuildModelSelect(selectedModel) {
+      var opts = '';
+      if (cachedModels.length === 0) {
+        opts = '<option value="">' + (selectedModel ? esc(selectedModel) : '请先测试连接或手动输入') + '</option>';
+      } else {
+        if (!selectedModel || cachedModels.indexOf(selectedModel) === -1) {
+          opts += '<option value="">（选择模型）</option>';
+        }
+        cachedModels.forEach(function (m) {
+          var sel = (m === selectedModel) ? ' selected' : '';
+          opts += '<option value="' + esc(m) + '"' + sel + '>' + esc(m) + '</option>';
+        });
+      }
+      modelSel.innerHTML = opts;
+    }
+    rebuildModelSelect(existing ? existing.model : '');
+
+    // 选择下拉时同步到手动输入框
+    modelSel.onchange = function () {
+      modelManual.value = modelSel.value || '';
+    };
+
+    // 测试连接并获取模型
+    var testBtn = container.querySelector('[data-action="test"]');
+    var testStatus = container.querySelector('#mg-api-test-status');
+    testBtn.onclick = async function () {
+      var baseUrl = container.querySelector('#mg-api-baseurl').value.trim();
+      var apiKey = container.querySelector('#mg-api-key').value.trim();
+      if (!baseUrl) { roche.ui.toast('请填写 Base URL'); return; }
+      if (!apiKey) { roche.ui.toast('请填写 API Key'); return; }
+      testBtn.disabled = true;
+      testStatus.textContent = '测试中...';
+      try {
+        var models = await fetchModels(baseUrl, apiKey);
+        if (models.length === 0) {
+          testStatus.textContent = '连接成功，但未返回模型列表';
+          roche.ui.toast('连接成功，但未返回模型列表');
+        } else {
+          cachedModels = models;
+          rebuildModelSelect(modelManual.value.trim() || (models[0] || ''));
+          // 自动选中第一个模型并回填手动输入框
+          if (!modelManual.value.trim() && models.length > 0) {
+            modelManual.value = models[0];
+          }
+          // 同步下拉到手动框
+          modelSel.value = modelManual.value;
+          testStatus.textContent = '成功获取 ' + models.length + ' 个模型';
+          roche.ui.toast('成功获取 ' + models.length + ' 个模型');
+        }
+      } catch (e) {
+        testStatus.textContent = '失败: ' + (e && e.message || e);
+        roche.ui.toast('测试失败: ' + (e && e.message || e));
+      } finally {
+        testBtn.disabled = false;
+      }
+    };
+
+    // 保存
+    container.querySelector('[data-action="save"]').onclick = async function () {
+      var name = container.querySelector('#mg-api-name').value.trim();
+      var baseUrl = container.querySelector('#mg-api-baseurl').value.trim();
+      var apiKey = container.querySelector('#mg-api-key').value.trim();
+      var model = modelManual.value.trim() || modelSel.value || '';
+
+      if (!name) { roche.ui.toast('请填写预设名称'); return; }
+      if (!baseUrl) { roche.ui.toast('请填写 Base URL'); return; }
+      if (!apiKey) { roche.ui.toast('请填写 API Key'); return; }
+      if (!model) { roche.ui.toast('请选择或填写模型'); return; }
+
+      var preset = {
+        id: existing ? existing.id : ('api-preset-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)),
+        name: name,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+        models: cachedModels
+      };
+
+      var list = await getApiPresets(roche);
+      if (existing) {
+        var idx = list.findIndex(function (p) { return p.id === existing.id; });
+        if (idx !== -1) {
+          list[idx] = preset;
+        } else {
+          list.push(preset);
+        }
+      } else {
+        list.push(preset);
+      }
+      await setApiPresets(roche, list);
+      roche.ui.toast('已保存');
+      showApiPresets(container, roche);
     };
   }
 
