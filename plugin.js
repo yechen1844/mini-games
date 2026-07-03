@@ -3598,7 +3598,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
 
         // 显示目标选择 UI
-        var wolfTargets = aliveNonWolves.map(function (p) { return p.seat; });
+        var wolfTargets = st.players.filter(function (p) { return p.alive; }).map(function (p) { return p.seat; });
         var wolfResult = await waitForUserInput(container, roche, 'wolf_target', { targets: wolfTargets });
         if (wolfResult && wolfResult.seat) {
           st.nightActions.wolvesTarget = wolfResult.seat;
@@ -3611,7 +3611,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var wolfVotes = {};
         if (st.mode === 'batch') {
           try {
-            var bp = await buildBatchPrompt(roche, '狼人请选择今晚要击杀的目标。所有存活狼人共同决定一个目标。仅狼人角色需要行动。');
+            var bp = await buildBatchPrompt(roche, '狼人请选择今晚要击杀的目标（可以击杀包括自己在内的任何存活玩家，允许自刀）。所有存活狼人共同决定一个目标。仅狼人角色需要行动。');
             var br = await aiChat(roche, { messages: bp.messages, temperature: 0.7 });
             appendDebug('response', '批量', br.text);
             var decisions = parseJsonResponse(br.text);
@@ -3642,7 +3642,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             var wolf = aliveWolves[wi];
             try {
               var priorMsgs = silentWolfMsgs.length > 0 ? '【狼人频道已有发言】\n' + silentWolfMsgs.join('\n') + '\n' : '';
-              var cp = await buildCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（回复座位号）。你和同伴共同决定。');
+              var cp = await buildCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（回复座位号，可以击杀包括自己在内的任何存活玩家，允许自刀）。你和同伴共同决定。');
               var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.7 });
               appendDebug('response', wolf.name, cr.text);
               var cd = parseJsonResponse(cr.text);
@@ -3672,7 +3672,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           if (wolfVotes[v] > maxV) { maxV = wolfVotes[v]; winSeat = parseInt(v, 10); }
         }
         if (winSeat != null) {
-          var validT = st.players.find(function (p) { return p.seat === winSeat && p.alive && p.role !== '狼人'; });
+          var validT = st.players.find(function (p) { return p.seat === winSeat && p.alive; });
           if (validT) st.nightActions.wolvesTarget = winSeat;
         }
       }
@@ -6550,8 +6550,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         await sleep(400);
       }
 
-      // 显示目标选择 UI（只能选好人）
-      var wolfTargets = aliveGood.map(function (p) { return p.seat; });
+      // 显示目标选择 UI（可以选任何存活玩家，允许自刀）
+      var wolfTargets = st.players.filter(function (p) { return p.alive; }).map(function (p) { return p.seat; });
       var wolfResult = await waitForXpUserInput(container, roche, 'wolf_target', { targets: wolfTargets });
       if (wolfResult && wolfResult.seat) {
         killSeat = wolfResult.seat;
@@ -6564,7 +6564,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var wolfVotes = {};
       if (st.mode === 'batch') {
         try {
-          var bp = await buildXpBatchPrompt(roche, '狼人请选择今晚要击杀的目标（仅限好人）。所有存活狼人共同决定一个目标。可选目标：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', ') + '。仅狼人角色需要行动。');
+          var bp = await buildXpBatchPrompt(roche, '狼人请选择今晚要击杀的目标（可以击杀包括自己在内的任何存活玩家，允许自刀）。所有存活狼人共同决定一个目标。可选目标：' + st.players.filter(function (p) { return p.alive; }).map(function (p) { return p.seat + '号'; }).join(', ') + '。仅狼人角色需要行动。');
           var br = await aiChat(roche, { messages: bp.messages, temperature: 0.7 });
           appendXpDebug('response', '批量', br.text);
           var decisions = parseJsonResponse(br.text);
@@ -6595,7 +6595,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           var wolf = aliveWolves[wi];
           try {
             var priorMsgs = silentWolfMsgs.length > 0 ? '【狼人频道已有发言】\n' + silentWolfMsgs.join('\n') + '\n' : '';
-            var cp = await buildXpCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（仅限好人，回复座位号）。你和同伴共同决定。可选目标：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', '));
+            var cp = await buildXpCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（回复座位号，可以击杀包括自己在内的任何存活玩家，允许自刀）。你和同伴共同决定。可选目标：' + st.players.filter(function (p) { return p.alive; }).map(function (p) { return p.seat + '号'; }).join(', '));
             var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.7 });
             appendXpDebug('response', wolf.name, cr.text);
             var cd = parseJsonResponse(cr.text);
@@ -6625,7 +6625,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (wolfVotes[v] > maxV) { maxV = wolfVotes[v]; winSeat = parseInt(v, 10); }
       }
       if (winSeat != null) {
-        var validT = st.players.find(function (p) { return p.seat === winSeat && p.alive && p.role === 'good'; });
+        var validT = st.players.find(function (p) { return p.seat === winSeat && p.alive; });
         if (validT) killSeat = winSeat;
       }
       // 若多数票无效，随机选一个好人
@@ -7263,7 +7263,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.13.1",
+    version: "1.13.2",
     apps: [
       {
         id: "mini-games-hub",
