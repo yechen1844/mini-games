@@ -1551,12 +1551,26 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             var convId = conv.id || conv.conversationId;
             if (!convId) return;
             if (conv.isGroup) {
-              allPlayers.forEach(function (p) {
-                if (!p.isUser) {
-                  if (!convMap[p.id]) convMap[p.id] = [];
-                  convMap[p.id].push(convId);
-                }
-              });
+              // 仅映射给实际属于该群成员的 char，避免群聊记忆泄漏给非群内角色
+              var memberIds = conv.members || [];
+              if (Array.isArray(memberIds) && memberIds.length > 0) {
+                allPlayers.forEach(function (p) {
+                  if (!p.isUser && memberIds.indexOf(p.id) !== -1) {
+                    if (!convMap[p.id]) convMap[p.id] = [];
+                    convMap[p.id].push(convId);
+                  }
+                });
+              } else if (conv.memberProfiles && Array.isArray(conv.memberProfiles)) {
+                // 退路：使用 memberProfiles 提取 id
+                var profileIds = conv.memberProfiles.map(function (m) { return m.id; });
+                allPlayers.forEach(function (p) {
+                  if (!p.isUser && profileIds.indexOf(p.id) !== -1) {
+                    if (!convMap[p.id]) convMap[p.id] = [];
+                    convMap[p.id].push(convId);
+                  }
+                });
+              }
+              // 若群聊无成员信息，则不映射给任何人（比映射给全部更安全）
             } else if (conv.contactId) {
               if (!convMap[conv.contactId]) convMap[conv.contactId] = [];
               convMap[conv.contactId].push(convId);
@@ -1647,12 +1661,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     else if (st.subPhase === 'day_vote') phaseName = '投票';
     var phaseLabel = '当前：第' + st.day + '天' + (phaseName ? ' ' + phaseName : ' 准备中');
 
-    // 按钮：仅在初始（subPhase 为空且循环未运行）时显示
+    // 按钮：游戏进行中（gameLoopRunning 或 subPhase 已设置）显示"游戏进行中"，否则显示"进入夜晚"
     var buttonHtml = '';
-    if (!st.subPhase && !st.gameLoopRunning) {
-      buttonHtml = '<button class="mg-btn mg-btn-primary" data-action="night">进入夜晚</button>';
-    } else if (st.gameLoopRunning) {
+    if (st.gameLoopRunning || st.subPhase) {
       buttonHtml = '<div class="mg-hint">游戏进行中…</div>';
+    } else if (!st.gameOver) {
+      buttonHtml = '<button class="mg-btn mg-btn-primary" data-action="night">进入夜晚</button>';
     }
 
     // 狼人同伴行（仅当 user 是狼人时显示）
@@ -1847,7 +1861,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var st = werewolfState;
     if (!st.gamelogLines) st.gamelogLines = [];
     st.gamelogLines.push({ text: text, cls: cls || 'msg', zhText: zhText || '' });
-    if (cls !== 'heart' && cls !== 'private') {
+    if (cls !== 'heart' && cls !== 'private' && cls !== 'transition') {
       st.publicLog.push(text);
     }
     var logEl = container.querySelector('#ww-gamelog');
@@ -2956,6 +2970,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
 
         var guardTargetSeat = null;
+        appendGamelog(container, '守卫正在行动…', 'transition');
+        rerenderPlay(container, roche);
         if (st.mode === 'batch') {
           try {
             var gbp = await buildBatchPrompt(roche, guardContext + ' 仅守卫角色需要行动。');
@@ -3095,6 +3111,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       } else {
         // 静默结算
+        appendGamelog(container, '狼人正在行动…', 'transition');
+        rerenderPlay(container, roche);
         var wolfVotes = {};
         if (st.mode === 'batch') {
           try {
@@ -3201,6 +3219,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       } else {
         // 静默结算
+        appendGamelog(container, '女巫正在行动…', 'transition');
+        rerenderPlay(container, roche);
         var witchContext = '你是女巫。';
         if (victim != null) {
           witchContext += '今晚' + victim + '号被刀了。';
@@ -3294,6 +3314,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       } else {
         // 静默结算
+        appendGamelog(container, '预言家正在行动…', 'transition');
+        rerenderPlay(container, roche);
         var seerTargets2 = st.players.filter(function (p) {
           return p.alive && p.id !== seer.id;
         }).map(function (p) { return p.seat; });
@@ -3439,6 +3461,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       } else {
         // AI char 发言（batch 和 polling 都逐个调用，保证视野隔离）
         var speakContext = '现在是白天发言环节。请基于你的身份、人设、记忆和场上公开信息进行发言。发言要符合你的角色人格，不要使用游戏套话。请在speech字段给出你的发言内容。';
+        appendGamelog(container, seat + '号正在思考发言…', 'transition');
+        rerenderPlay(container, roche);
         try {
           var sp = await buildCharPrompt(roche, player, speakContext);
           var sr = await aiChat(roche, { messages: sp.messages, temperature: 0.7 });
@@ -3495,6 +3519,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       }).map(function (p) { return p.seat; });
 
       var voteContext = '现在是投票阶段。请选择你要投出局的玩家（在target字段回复座位号）。可选目标：' + voteTargets.join(', ');
+      appendGamelog(container, player.seat + '号正在思考投票…', 'transition');
+      rerenderPlay(container, roche);
       try {
         var vp = await buildCharPrompt(roche, player, voteContext);
         var vr = await aiChat(roche, { messages: vp.messages, temperature: 0.7 });
