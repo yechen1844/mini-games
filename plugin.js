@@ -4339,10 +4339,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</select>' +
       '</div>' +
       '<div class="mg-field">' +
-      '<label class="mg-label"><input type="checkbox" id="xp-spectator"> 旁观模式</label>' +
-      '<div class="mg-hint">开启后你以第三人称旁观：所有角色由 AI 操控，你以第三人称旁观全场（含心声与夜间行动）</div>' +
-      '</div>' +
-      '<div class="mg-field">' +
       '<label class="mg-label">API 预设</label>' +
       '<select class="mg-input" id="xp-api-preset"><option value="">加载中...</option></select>' +
       '<div class="mg-hint">选择已配置的 API 预设后，所有 AI 调用将走该 API；不选则使用 Roche 默认 AI。可在「API 设置」中创建预设</div>' +
@@ -4496,19 +4492,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       checks.forEach(function (cb) { checkedIds.push(cb.value); });
       var count = parseInt(countSel.value, 10);
       var mode = container.querySelector('#xp-mode').value;
-      var spectator = container.querySelector('#xp-spectator') ? container.querySelector('#xp-spectator').checked : false;
+      var spectator = false;
       var apiPresetId = container.querySelector('#xp-api-preset') ? container.querySelector('#xp-api-preset').value : '';
 
-      if (spectator) {
-        if (checkedIds.length !== count) {
-          roche.ui.toast("旁观模式需要选择 " + count + " 个角色（共 " + count + " 人，你不参与）");
-          return;
-        }
-      } else {
-        if (checkedIds.length !== count - 1) {
-          roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
-          return;
-        }
+      if (checkedIds.length !== count - 1) {
+        roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
+        return;
       }
 
       // 开新局前清除旧存档
@@ -4623,13 +4612,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         phase: "play",
         day: 0,
         mode: mode,
-        spectator: spectator,
+        spectator: false,
         preset: preset || null,
         apiPresetId: apiPresetId || null,
         count: count,
         wolfCount: wolfCount,
         players: allPlayers,
-        userSeat: spectator ? 0 : userSeat,
+        userSeat: userSeat,
         userRole: '', // 待 Night0 分配
         publicLog: [],
         gamelogLines: [],
@@ -4647,8 +4636,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         debugLog: [],
         charMemories: null,
         _gamelogScroll: 0,
-        _resumePhase: null,
-        lastEliminatedWasWolf: null
+        _resumePhase: null
       };
 
       saveXpWerewolfState(roche);
@@ -5114,6 +5102,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var st = xpWerewolfState;
     var memoryText = await getCharMemoryTextXp(roche, player);
 
+    var _userPlayer = st.players.find(function (p) { return p.isUser; });
+    var _userName = _userPlayer ? (_userPlayer.name || _userPlayer.handle || '玩家') : '玩家';
+
     var publicLogText = (st.publicLog && st.publicLog.length > 0)
       ? st.publicLog.join('\n') : '(无)';
 
@@ -5160,6 +5151,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 好人：分析发言漏洞，关注谁在为谁辩护、谁在带节奏。已出局玩家的 XP 提供线索——若某出局的XP不在狼人XP列表里，他是好人；若在列表里，他是狼人。\n' +
       '- 所有人：发言要有逻辑，要会怀疑。不要傻乎乎地暴露信息。聪明人会骗人、会演、会藏。\n' +
       '- 但一切伪装和欺骗都必须用你的人格声音说出来，不能变成"游戏套话"。\n\n' +
+      '【发言原则】\n' +
+      '- 你的发言要从你的人设、记忆、与其他角色的关系出发\n' +
+      '- 如果你的XP与' + _userName + '有关，你在发言中可以隐晦地表现出对' + _userName + '的关注或特殊情感，但不要直接暴露XP内容\n' +
+      '- 作为狼人，你要伪装成好人，分析"谁的XP像狼人"\n' +
+      '- 作为好人，你要根据公开的狼人XP和大家的发言推理\n' +
+      '- 记住：这是一场情趣游戏，气氛应该是暧昧、有趣的，不是严肃的法庭\n\n' +
       '【你的角色信息】\n' +
       '名字：' + player.name + '\n' +
       '座位号：' + player.seat + '\n' +
@@ -5209,6 +5206,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   async function buildXpBatchPrompt(roche, context) {
     var st = xpWerewolfState;
     var aliveChars = st.players.filter(function (p) { return p.alive && !p.isUser; });
+
+    var _bUserPlayer = st.players.find(function (p) { return p.isUser; });
+    var _bUserName = _bUserPlayer ? (_bUserPlayer.name || _bUserPlayer.handle || '玩家') : '玩家';
 
     var charsInfo = '';
     for (var i = 0; i < aliveChars.length; i++) {
@@ -5263,7 +5263,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 狼人：不要自爆身份。你的 XP 在公开列表里，但没人知道是谁的——利用这一点。学会伪装、甩锅、带节奏。\n' +
       '- 好人：分析发言漏洞，关注谁在为谁辩护。已出局玩家的 XP 提供线索。\n' +
       '- 但一切伪装和欺骗都必须用角色的人格声音说出来。\n\n' +
-      buildXpPlayerRoster(null, '你(user)') + '\n\n' +
+      '【发言原则】\n' +
+      '- 你的发言要从你的人设、记忆、与其他角色的关系出发\n' +
+      '- 如果你的XP与' + _bUserName + '有关，你在发言中可以隐晦地表现出对' + _bUserName + '的关注或特殊情感，但不要直接暴露XP内容\n' +
+      '- 作为狼人，你要伪装成好人，分析"谁的XP像狼人"\n' +
+      '- 作为好人，你要根据公开的狼人XP和大家的发言推理\n' +
+      '- 记住：这是一场情趣游戏，气氛应该是暧昧、有趣的，不是严肃的法庭\n\n' +
+      buildXpPlayerRoster(null, _bUserName || '你(user)') + '\n\n' +
       '【公开的狼人 XP（打乱顺序，不映射到玩家）】\n' + revealedWolfXpsText + '\n' +
       '\n【已出局玩家及其 XP】\n' + eliminatedText + '\n' +
       '\n【角色列表】\n' + charsInfo + '\n' +
@@ -5299,10 +5305,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 构建 Night0 XP 收集的批量提示词
-  async function buildXpNight0BatchPrompt(roche) {
+  async function buildXpNight0BatchPrompt(roche, userName, userPersona) {
     var st = xpWerewolfState;
     var charsInfo = '';
     var aliveNonUser = st.players.filter(function (p) { return !p.isUser; });
+    var memoriesBlock = '';
     for (var i = 0; i < aliveNonUser.length; i++) {
       var p = aliveNonUser[i];
       var memoryText = await getCharMemoryTextXp(roche, p);
@@ -5310,18 +5317,39 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         '座位' + p.seat + '号 / ' + p.name + '\n' +
         '人设:' + (p.personaText || '(无)') + '\n' +
         '记忆:' + (memoryText || '(无)') + '\n---\n';
+      if (memoryText) {
+        memoriesBlock += p.name + '：' + memoryText + '\n---\n';
+      }
     }
 
+    var userRelateLine = (userName && userName !== '玩家')
+      ? '3. 大部分角色的XP应该与' + userName + '有关——因为这是一场情趣游戏，' + userName + '是主角\n'
+      : '3. XP 可以与场上的某位玩家有关\n';
+
+    var userInfoBlock = (userName && userName !== '玩家')
+      ? userName + '的信息：\n' + (userPersona || '(无)') + '\n\n'
+      : '';
+
     var systemContent =
-      '你是 XP 狼人杀的主持人。现在需要为以下每个角色生成一个 XP（性癖/床上喜好）。\n' +
+      '系统：你是主持人。请为以下每个角色生成一个XP（性癖/床上喜好）。\n' +
       '要求：\n' +
-      '1. XP 必须符合角色的人设、性格、背景和记忆——是这个人真实的性癖\n' +
-      '2. XP 可以是床上喜好、性癖、特殊癖好、性幻想等\n' +
-      '3. 每个 XP 简短（一句话，10-40字），要有辨识度\n' +
-      '4. 不同角色的 XP 应有差异，避免雷同\n' +
-      '5. XP 要具体 enough 让人能通过行为推理，但不要太直白暴露身份\n' +
-      '6. 返回 JSON 数组：[{seat: <座位号整数>, xp: "<XP描述>"}]\n\n' +
-      '角色列表：\n' + charsInfo;
+      '1. XP要符合角色的人设和性格\n' +
+      '2. XP可以是床上喜好、性癖、特殊癖好等\n' +
+      userRelateLine +
+      '4. XP要具体、有画面感，但简短（一两句话）\n' +
+      '5. 返回JSON数组：[{seat: <座位号整数>, xp: "<XP描述>"}]\n' +
+      '6. 注意：XP的语言和表达方式不要暴露角色身份。详见下方"伪装规则"。\n\n' +
+      '【XP伪装规则 — 非常重要】\n' +
+      '你的XP会被公开展示（如果是狼人）或在淘汰时公开。XP必须难以追溯到具体角色：\n' +
+      '- 语言：不要用你的母语写XP。所有XP统一用中文写，这样不会因为语言暴露国籍。\n' +
+      '  例如：7个英国char + 1个中国char，如果中国char的XP用中文写而其他用英文，立刻暴露。\n' +
+      '- 人称：不要用你人设中特有的自称或口头禅。\n' +
+      '  例如：你人设中自称"哥"，XP里就不要出现"哥喜欢..."。\n' +
+      '- 用词：不要用你人设中标志性的词汇、句式、语气。\n' +
+      '- 想象成匿名写在纸条上的秘密——任何人都该能写下它。\n\n' +
+      '角色列表（含人设）：\n' + charsInfo + '\n' +
+      userInfoBlock +
+      '已有记忆（如有）：\n' + (memoriesBlock || '(无)');
 
     var messages = [
       { role: 'system', content: systemContent },
@@ -5332,19 +5360,34 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   // 构建 Night0 XP 收集的单 char 提示词（polling）
-  async function buildXpNight0CharPrompt(roche, player) {
+  async function buildXpNight0CharPrompt(roche, player, userName, userPersona) {
     var st = xpWerewolfState;
     var memoryText = await getCharMemoryTextXp(roche, player);
 
+    var userRelateLine = (userName && userName !== '玩家')
+      ? '2. 大部分情况下，你的XP应该与' + userName + '有关——这是一场情趣游戏，' + userName + '是主角\n'
+      : '2. XP 可以与场上的某位玩家有关\n';
+
+    var userInfoBlock = (userName && userName !== '玩家')
+      ? userName + '的信息：\n' + (userPersona || '(无)') + '\n\n'
+      : '';
+
     var systemContent =
-      '你是 ' + player.name + '。现在你在玩一局 XP 狼人杀游戏。主持人（AI）私下询问你的 XP（性癖/床上喜好）。\n' +
+      '系统：你是' + player.name + '。请诚实地告诉主持人你的XP（性癖/床上喜好）。\n' +
       '要求：\n' +
-      '1. 诚实地说出你的 XP，必须符合你的人设、性格、背景和记忆——这是你真实的性癖\n' +
-      '2. XP 可以是床上喜好、性癖、特殊癖好、性幻想等\n' +
-      '3. 简短（一句话，10-40字），要有辨识度\n' +
-      '4. 返回 JSON：{xp: "<XP描述>"}\n\n' +
-      '你的人设：' + (player.personaText || '(无)') + '\n' +
-      '你的记忆：' + (memoryText || '(无)');
+      '1. 符合你的人设和性格\n' +
+      userRelateLine +
+      '3. 具体有画面感，但简短（一两句话）\n' +
+      '4. 返回JSON：{xp: "..."}\n\n' +
+      '【XP伪装规则 — 非常重要】\n' +
+      '你的XP会被公开展示（如果是狼人）或在淘汰时公开。XP必须难以追溯到你：\n' +
+      '- 用中文写，不要用你的母语（避免因语言暴露国籍）\n' +
+      '- 不要用你人设中特有的自称或口头禅\n' +
+      '- 不要用你标志性的词汇、句式、语气\n' +
+      '- 想象成匿名写在纸条上的秘密\n\n' +
+      '你的信息：\n' + (player.personaText || '(无)') + '\n\n' +
+      userInfoBlock +
+      '已有记忆（如有）：\n' + (memoryText || '(无)');
 
     var messages = [
       { role: 'system', content: systemContent },
@@ -5500,13 +5543,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (!xpWerewolfState || xpWerewolfState.gameOver) break;
         await runXpDayVote(container, roche);
         if (!xpWerewolfState || xpWerewolfState.gameOver) break;
-        // 若投票出局的是狼人，则跳过夜杀（对好人的奖励）
-        if (xpWerewolfState.lastEliminatedWasWolf === true) {
-          appendXpGamelog(container, '狼人被投票出局，今晚狼人无法行动。', 'dm');
-          xpWerewolfState.lastEliminatedWasWolf = null;
-        } else {
-          await runXpNight(container, roche);
-        }
+        await runXpNight(container, roche);
         if (!xpWerewolfState || xpWerewolfState.gameOver) break;
       }
     } catch (e) {
@@ -5536,6 +5573,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     // === 收集 user 的 XP ===
     var userPlayer = st.players.find(function (p) { return p.isUser; });
+    var userName = userPlayer ? (userPlayer.name || userPlayer.handle || '玩家') : '玩家';
+    var userPersona = userPlayer ? (userPlayer.personaText || userPlayer.bio || '') : '';
     if (userPlayer && !st.spectator && !userPlayer.xp) {
       var xpResult = await waitForXpUserInput(container, roche, 'xp_input', {});
       if (xpResult && xpResult.xp) {
@@ -5553,7 +5592,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     if (charPlayers.length > 0) {
       if (st.mode === 'batch') {
         try {
-          var bp = await buildXpNight0BatchPrompt(roche);
+          var bp = await buildXpNight0BatchPrompt(roche, userName, userPersona);
           var br = await aiChat(roche, { messages: bp.messages, temperature: 0.8 });
           appendXpDebug('response', 'Night0批量', br.text);
           var arr = parseJsonResponse(br.text);
@@ -5577,7 +5616,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         for (var i = 0; i < charPlayers.length; i++) {
           var p = charPlayers[i];
           try {
-            var cp = await buildXpNight0CharPrompt(roche, p);
+            var cp = await buildXpNight0CharPrompt(roche, p, userName, userPersona);
             var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.8 });
             appendXpDebug('response', p.name, cr.text);
             var cd = parseJsonResponse(cr.text);
@@ -5646,9 +5685,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     st.revealedWolfXps = wolfXps;
 
     appendXpGamelog(container, '【主持人】狼人已选定。本局狼人数：' + st.wolfCount + '。', 'dm');
-    appendXpGamelog(container, '【主持人】公开的狼人 XP（打乱顺序，不映射到玩家）：', 'dm');
+    appendXpGamelog(container, '【主持人】以下是狼人的XP（已匿名化处理，请勿根据语言或用词推断身份）：', 'dm');
     wolfXps.forEach(function (xp, i) {
-      appendXpGamelog(container, '  ' + (i + 1) + '. ' + xp, 'dm');
+      appendXpGamelog(container, '  狼人' + (i + 1) + '：' + xp, 'dm');
     });
     appendXpGamelog(container, '【主持人】推理要点：出局玩家的 XP 会公开，若匹配上述列表则是狼人，否则是好人。', 'dm');
 
@@ -5704,7 +5743,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         appendXpGamelog(container, seat + '号(' + player.name + ')：' + speech, 'msg');
         appendXpCharHistory(player.id, st.day, 'day_speak', 'speech', speech);
       } else {
-        var speakContext = '现在是白天发言环节。请基于你的身份、XP、人设、记忆和场上公开信息进行发言。发言要符合你的角色人格，不要使用游戏套话。请在speech字段给出你的发言内容。';
+        var _spUser = st.players.find(function (p) { return p.isUser; });
+        var _spUserName = _spUser ? (_spUser.name || _spUser.handle || '玩家') : '玩家';
+        var speakContext = '当前玩家：' + _spUserName + ' 和其他角色\n现在是白天发言环节。请基于你的身份、XP、人设、记忆和场上公开信息进行发言。发言要符合你的角色人格，不要使用游戏套话。请在speech字段给出你的发言内容。';
         appendXpGamelog(container, seat + '号正在思考发言…', 'transition');
         rerenderXpPlay(container, roche);
         try {
@@ -5759,7 +5800,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         return p.alive && p.seat !== player.seat;
       }).map(function (p) { return p.seat; });
 
-      var voteContext = '现在是投票阶段。请选择你要投出局的玩家（在target字段回复座位号）。可选目标：' + voteTargets.join(', ') + '。根据公开的狼人XP、已出局玩家的XP、以及大家的发言，推理谁最可能是狼人。';
+      var _vtUser = st.players.find(function (p) { return p.isUser; });
+      var _vtUserName = _vtUser ? (_vtUser.name || _vtUser.handle || '玩家') : '玩家';
+      var voteContext = '当前玩家：' + _vtUserName + ' 和其他角色\n现在是投票阶段。请选择你要投出局的玩家（在target字段回复座位号）。可选目标：' + voteTargets.join(', ') + '。根据公开的狼人XP、已出局玩家的XP、以及大家的发言，推理谁最可能是狼人。';
       appendXpGamelog(container, player.seat + '号正在思考投票…', 'transition');
       rerenderXpPlay(container, roche);
       try {
@@ -5810,7 +5853,6 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       }
     }
 
-    st.lastEliminatedWasWolf = null;
     if (winners.length === 1) {
       var outSeat = winners[0];
       var outPlayer = st.players.find(function (p) { return p.seat === outSeat; });
@@ -5827,8 +5869,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         });
         appendXpGamelog(container, '投票结果：' + outSeat + '号(' + outPlayer.name + ')出局。', 'dm');
         appendXpGamelog(container, outSeat + '号的XP：' + outPlayer.xp + ' — 身份：' + xpRoleLabel(outPlayer.role), 'dm');
-        st.lastEliminatedWasWolf = (outPlayer.role === 'wolf');
-        if (st.lastEliminatedWasWolf) {
+        if (outPlayer.role === 'wolf') {
           appendXpGamelog(container, '该玩家是狼人！', 'dm');
         } else {
           appendXpGamelog(container, '该玩家是好人。', 'dm');
@@ -6121,6 +6162,22 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       });
     }
 
+    // 狼人胜利奖励：若狼人胜，展示存活狼人可对所选角色实现XP
+    var wolfRewardHtml = '';
+    if (st.winner === '狼人') {
+      var survivingWolves = st.players.filter(function (p) { return p.role === 'wolf' && p.alive; });
+      if (survivingWolves.length > 0) {
+        var wolfListText = survivingWolves.map(function (p) {
+          return p.seat + '号(' + p.name + ')';
+        }).join('、');
+        wolfRewardHtml = '<div class="mg-phase-label" style="margin-top:18px;color:#c4788a;">狼人胜利奖励</div>' +
+          '<div style="padding:14px 16px;background:linear-gradient(180deg,rgba(122,46,58,0.14) 0%,rgba(13,13,26,0.4) 100%);border:1px solid rgba(139,58,74,0.4);border-radius:3px;">' +
+          '<div style="color:#e8e4d8;font-size:13px;line-height:1.7;">存活的狼人：<b style="color:#c4788a;">' + esc(wolfListText) + '</b></div>' +
+          '<div style="color:#8a8578;font-size:12px;margin-top:6px;line-height:1.6;">作为胜利奖励，存活的狼人可以选择对场上一个角色实现自己的XP（情趣场景），也可以选择不做。详见下方角色记忆中的"奖励场景"。</div>' +
+          '</div>';
+      }
+    }
+
     var memoriesHtml = '';
     if (!st.charMemories) {
       memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
@@ -6171,6 +6228,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
       '</div>' +
       '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      wolfRewardHtml +
       memoriesHtml +
       '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
       '<div class="mg-gamelog" id="xp-gamelog">' + logHtml + '</div>' +
@@ -6362,6 +6420,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '   - memory: 母语记忆（中文母语者就用中文）\n' +
       '   - memoryZh: 中文翻译（中文母语者留空）\n' +
       '7. 包含所有非用户角色\n\n' +
+      '特殊规则：\n' +
+      '- 如果该角色是狼人且狼人阵营胜利，且该角色存活到最后，在记忆的最后加一段"奖励场景"：\n' +
+      '  该角色可以选择对场上一个角色实现自己的XP（情趣场景）。该角色也可以选择不做。\n' +
+      '  用该角色的母语写这段奖励场景（如果有memoryZh则提供中文翻译）。\n' +
+      '  格式：在 memory 字段末尾加 "--- 奖励场景 ---\\n" + 场景内容。\n' +
+      '- 如果该角色是好人或狼人输了，不需要奖励场景。\n\n' +
+      '本局结果：' + (st.winner || '未知') + '阵营胜利\n\n' +
       '玩家名单：\n' + roster + '\n' +
       '需要生成记忆的角色：' + charList + '\n\n' +
       '公开的狼人 XP：\n' + revealedWolfXpsText + '\n\n' +
@@ -6394,7 +6459,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.0.0",
+    version: "1.12.1",
     apps: [
       {
         id: "mini-games-hub",
