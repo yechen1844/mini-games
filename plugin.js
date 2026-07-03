@@ -2668,7 +2668,27 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var sel = container.querySelector('#summary-conv-select');
         if (!sel || !sel.value) { roche.ui.toast('请先选择会话'); return; }
         try {
-          await injectMessageToRoche(sel.value, '【狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
+          var opt = sel.options[sel.selectedIndex];
+          var isGroup = opt && opt._isGroup;
+          var contactId = opt && opt._contactId;
+          var convId = sel.value;
+          if (!isGroup) {
+            // 单聊：必须用 char 消息格式，否则不会进入上下文
+            var chars = await roche.character.list();
+            var char = null;
+            if (contactId) {
+              char = chars.find(function (c) { return c.id === contactId; });
+            }
+            if (!char) {
+              char = chars.find(function (c) { return c.conversationId === convId; });
+            }
+            if (!char) { roche.ui.toast('无法找到该单聊对应的角色'); return; }
+            var senderName = char.handle || char.name;
+            await injectMessageToRoche(convId, '【狼人杀游戏总结】\n' + st.gameSummary.summary, 'char', char.id, senderName);
+          } else {
+            // 群聊：系统消息格式
+            await injectMessageToRoche(convId, '【狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
+          }
           roche.ui.toast('已注入为消息');
         } catch (e) {
           roche.ui.toast('注入失败: ' + (e && e.message || e));
@@ -7159,7 +7179,27 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         var sel = container.querySelector('#summary-conv-select');
         if (!sel || !sel.value) { roche.ui.toast('请先选择会话'); return; }
         try {
-          await injectMessageToRoche(sel.value, '【XP狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
+          var opt = sel.options[sel.selectedIndex];
+          var isGroup = opt && opt._isGroup;
+          var contactId = opt && opt._contactId;
+          var convId = sel.value;
+          if (!isGroup) {
+            // 单聊：必须用 char 消息格式，否则不会进入上下文
+            var chars = await roche.character.list();
+            var char = null;
+            if (contactId) {
+              char = chars.find(function (c) { return c.id === contactId; });
+            }
+            if (!char) {
+              char = chars.find(function (c) { return c.conversationId === convId; });
+            }
+            if (!char) { roche.ui.toast('无法找到该单聊对应的角色'); return; }
+            var senderName = char.handle || char.name;
+            await injectMessageToRoche(convId, '【XP狼人杀游戏总结】\n' + st.gameSummary.summary, 'char', char.id, senderName);
+          } else {
+            // 群聊：系统消息格式
+            await injectMessageToRoche(convId, '【XP狼人杀游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
+          }
           roche.ui.toast('已注入为消息');
         } catch (e) {
           roche.ui.toast('注入失败: ' + (e && e.message || e));
@@ -7269,7 +7309,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.13.4",
+    version: "1.13.5",
     apps: [
       {
         id: "mini-games-hub",
