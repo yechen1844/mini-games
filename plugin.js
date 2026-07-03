@@ -2756,16 +2756,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     var systemMsg = '请为以下' + gameName + '游戏生成一份全局总结记忆。\n' +
       '要求：\n' +
-      '1. 说明玩了什么游戏（' + gameName + '）\n' +
+      '1. 开头先列出参与者名单，标明每个人的座位号、名字和身份，例如："参与者：A(1号,狼人)、B(2号,好人)、C(3号,预言家)"\n' +
       '2. 用两句话简述游戏规则\n' +
-      '3. 描述游戏经过（每天发生了什么，关键事件，转折点）\n' +
+      '3. 描述游戏经过（每天发生了什么，关键事件，转折点）—— 提到玩家时必须用名字（可带座位号），不要只写座位号\n' +
       '4. 描述结局（谁赢了，怎么赢的）\n' +
-      '5. 全文200字以内，简洁明了，像旁观者的记录\n' +
+      '5. 全文300字以内，简洁明了，像旁观者的记录\n' +
       '6. 用中文写\n' +
       '7. 返回 JSON：{ summary: "总结文本" }\n\n' +
       '游戏规则参考：' + ruleDesc + '\n\n' +
       '本局结果：' + (st.winner || '未知') + '阵营胜利，共' + st.day + '天\n\n' +
-      '玩家名单：\n' + roster + '\n' +
+      '玩家名单（座位号-名字-身份-状态）：\n' + roster + '\n' +
       revealedInfo +
       '\n公开事件记录：\n' + (publicLogText || '(无)').slice(-4000);
 
@@ -7263,7 +7263,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.13.2",
+    version: "1.13.3",
     apps: [
       {
         id: "mini-games-hub",
