@@ -912,7 +912,23 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         }
       } catch (e) { /* 读取预设失败，走默认 */ }
     }
-    return await roche.ai.chat(opts);
+
+    var lastError = null;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await roche.ai.chat(opts);
+      } catch (e) {
+        lastError = e;
+        if (attempt < 3) {
+          // 等待一会再重试（递增延迟：1s, 2s）
+          await new Promise(function (r) { setTimeout(r, attempt * 1000); });
+        }
+      }
+    }
+    // 3次都失败，抛出带标记的错误
+    var err = new Error('API调用失败（已重试3次）: ' + (lastError && lastError.message || String(lastError)));
+    err._apiRetryExhausted = true;
+    throw err;
   }
 
   // 获取所有游戏（内置 + 自定义）
@@ -1350,6 +1366,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           resumeBar.querySelector('[data-action="resume"]').onclick = async function () {
             var loaded = await loadWerewolfState(roche);
             if (loaded && werewolfState && werewolfState.phase === 'play') {
+              werewolfState._interrupted = false;
+              werewolfState._interruptError = null;
               if (werewolfState.gameOver) {
                 // 已结束的存档直接显示结束界面
                 renderWerewolfPlay(container, roche);
@@ -1677,11 +1695,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     // 按钮：游戏进行中（gameLoopRunning 或 subPhase 已设置）显示"游戏进行中"，否则显示"进入夜晚"
     var buttonHtml = '';
-    if (st.gameLoopRunning || st.subPhase) {
+    if (st._interrupted) {
+      // 中断状态下不显示行动按钮
+      buttonHtml = '';
+    } else if (st.gameLoopRunning || st.subPhase) {
       buttonHtml = '<div class="mg-hint">游戏进行中…</div>';
     } else if (!st.gameOver) {
       buttonHtml = '<button class="mg-btn mg-btn-primary" data-action="night">进入夜晚</button>';
     }
+
+    // 中断提示横幅
+    var intBanner = st._interrupted
+      ? '<div style="padding:12px;background:rgba(122,46,58,0.2);border:1px solid #7a2e3a;border-radius:3px;margin-bottom:12px;color:#e85d5d;font-size:13px;">游戏因API错误中断。请返回设置页重新开始或检查API配置后继续。错误：' + esc(st._interruptError || '') + '</div>'
+      : '';
 
     // 狼人同伴行（仅当 user 是狼人时显示）
     var fellowWolvesLine = '';
@@ -1705,6 +1731,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</div>' +
       '<div class="mg-content">' +
       '<div class="mg-form-wrap">' +
+      intBanner +
       '<div class="mg-role-card">' +
       '<div class="mg-role-emoji"></div>' +
       (st.spectator
@@ -2913,7 +2940,21 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (!werewolfState || werewolfState.gameOver) break;
       }
     } catch (e) {
+      appendGamelog(container, '游戏发生错误: ' + (e && e.message || String(e)), 'dm');
       appendDebug('system', 'loop', '游戏循环异常: ' + (e && e.message || String(e)));
+      if (e && e._apiRetryExhausted) {
+        // API错误：中断游戏，存档，允许恢复
+        werewolfState._interrupted = true;
+        werewolfState._interruptError = (e && e.message || String(e));
+        werewolfState.gameLoopRunning = false;
+        saveWerewolfState(roche);
+        renderWerewolfPlay(container, roche);
+        // 显示错误报告
+        showApiErrorReport(container, roche, e.message, 'werewolf');
+      } else {
+        werewolfState.gameLoopRunning = false;
+        saveWerewolfState(roche);
+      }
     } finally {
       if (werewolfState) werewolfState.gameLoopRunning = false;
       if (werewolfState && werewolfState.gameOver) {
@@ -4381,6 +4422,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           resumeBar.querySelector('[data-action="resume"]').onclick = async function () {
             var loaded = await loadXpWerewolfState(roche);
             if (loaded && xpWerewolfState && xpWerewolfState.phase === 'play') {
+              xpWerewolfState._interrupted = false;
+              xpWerewolfState._interruptError = null;
               if (xpWerewolfState.gameOver) {
                 renderXpWerewolfPlay(container, roche);
                 return;
@@ -4698,11 +4741,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     // 按钮区
     var buttonHtml = '';
-    if (st.gameLoopRunning || st.subPhase) {
+    if (st._interrupted) {
+      // 中断状态下不显示行动按钮
+      buttonHtml = '';
+    } else if (st.gameLoopRunning || st.subPhase) {
       buttonHtml = '<div class="mg-hint">游戏进行中…</div>';
     } else if (!st.gameOver) {
       buttonHtml = '<button class="mg-btn mg-btn-primary" data-action="start-xp">开始XP收集</button>';
     }
+
+    // 中断提示横幅
+    var intBanner = st._interrupted
+      ? '<div style="padding:12px;background:rgba(122,46,58,0.2);border:1px solid #7a2e3a;border-radius:3px;margin-bottom:12px;color:#e85d5d;font-size:13px;">游戏因API错误中断。请返回设置页重新开始或检查API配置后继续。错误：' + esc(st._interruptError || '') + '</div>'
+      : '';
 
     // 狼人同伴行
     var fellowWolvesLine = '';
@@ -4734,6 +4785,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '</div>' +
       '<div class="mg-content">' +
       '<div class="mg-form-wrap">' +
+      intBanner +
       '<div class="mg-role-card">' +
       roleDisplay +
       '</div>' +
@@ -5322,9 +5374,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       }
     }
 
-    var userRelateLine = (userName && userName !== '玩家')
-      ? '3. 大部分角色的XP应该与' + userName + '有关——因为这是一场情趣游戏，' + userName + '是主角\n'
-      : '3. XP 可以与场上的某位玩家有关\n';
+    var userRelateLine = '3. XP 可以与场上的某位玩家有关\n';
 
     var userInfoBlock = (userName && userName !== '玩家')
       ? userName + '的信息：\n' + (userPersona || '(无)') + '\n\n'
@@ -5346,6 +5396,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 人称：不要用你人设中特有的自称或口头禅。\n' +
       '  例如：你人设中自称"哥"，XP里就不要出现"哥喜欢..."。\n' +
       '- 用词：不要用你人设中标志性的词汇、句式、语气。\n' +
+      '- 人名：XP中不要出现任何具体人名（包括你自己的名字、其他角色名、用户名）。用"那个人""某个人"等代称。\n' +
       '- 想象成匿名写在纸条上的秘密——任何人都该能写下它。\n\n' +
       '角色列表（含人设）：\n' + charsInfo + '\n' +
       userInfoBlock +
@@ -5364,9 +5415,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var st = xpWerewolfState;
     var memoryText = await getCharMemoryTextXp(roche, player);
 
-    var userRelateLine = (userName && userName !== '玩家')
-      ? '2. 大部分情况下，你的XP应该与' + userName + '有关——这是一场情趣游戏，' + userName + '是主角\n'
-      : '2. XP 可以与场上的某位玩家有关\n';
+    var userRelateLine = '2. XP 可以与场上的某位玩家有关\n';
 
     var userInfoBlock = (userName && userName !== '玩家')
       ? userName + '的信息：\n' + (userPersona || '(无)') + '\n\n'
@@ -5384,6 +5433,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '- 用中文写，不要用你的母语（避免因语言暴露国籍）\n' +
       '- 不要用你人设中特有的自称或口头禅\n' +
       '- 不要用你标志性的词汇、句式、语气\n' +
+      '- 人名：XP中不要出现任何具体人名（包括你自己的名字、其他角色名、用户名）。用"那个人""某个人"等代称。\n' +
       '- 想象成匿名写在纸条上的秘密\n\n' +
       '你的信息：\n' + (player.personaText || '(无)') + '\n\n' +
       userInfoBlock +
@@ -5547,7 +5597,19 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (!xpWerewolfState || xpWerewolfState.gameOver) break;
       }
     } catch (e) {
+      appendXpGamelog(container, '游戏发生错误: ' + (e && e.message || String(e)), 'dm');
       appendXpDebug('system', 'loop', '游戏循环异常: ' + (e && e.message || String(e)));
+      if (e && e._apiRetryExhausted) {
+        xpWerewolfState._interrupted = true;
+        xpWerewolfState._interruptError = (e && e.message || String(e));
+        xpWerewolfState.gameLoopRunning = false;
+        saveXpWerewolfState(roche);
+        renderXpWerewolfPlay(container, roche);
+        showApiErrorReport(container, roche, e.message, 'xp');
+      } else {
+        xpWerewolfState.gameLoopRunning = false;
+        saveXpWerewolfState(roche);
+      }
     } finally {
       if (xpWerewolfState) xpWerewolfState.gameLoopRunning = false;
       if (xpWerewolfState && xpWerewolfState.gameOver) {
@@ -6454,12 +6516,44 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   /* ============================================================
+   * API 错误报告（两个游戏共用）
+   * ============================================================ */
+  function showApiErrorReport(container, roche, errorMsg, gameType) {
+    var st = (gameType === 'xp') ? xpWerewolfState : werewolfState;
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#13131f;border:1px solid #7a2e3a;border-radius:4px;padding:24px;max-width:500px;width:100%;color:#d4af37;';
+    box.innerHTML =
+      '<div style="font-size:18px;font-weight:bold;margin-bottom:16px;color:#e85d5d;">API 调用失败</div>' +
+      '<div style="color:#aaa;font-size:13px;line-height:1.6;margin-bottom:16px;">' +
+      '模型调用已重试3次仍失败，游戏已暂停并自动存档。' +
+      '<br><br>错误信息：<br><code style="display:block;background:#0a0a14;padding:10px;border-radius:3px;color:#e85d5d;font-size:12px;word-break:break-all;">' + esc(errorMsg || '未知错误') + '</code>' +
+      '<br>可能原因：网络波动、API额度不足、API Key失效、模型不可用等。' +
+      '<br><br>你可以稍后在游戏设置页选择「继续上次游戏」从中断处恢复。' +
+      '</div>' +
+      '<div style="display:flex;gap:10px;">' +
+      '<button class="mg-btn mg-btn-primary" data-action="back">返回设置</button>' +
+      '</div>';
+    overlay.appendChild(box);
+    container.appendChild(overlay);
+    box.querySelector('[data-action="back"]').onclick = function () {
+      overlay.remove();
+      if (gameType === 'xp') {
+        showXpWerewolfGame(container, roche);
+      } else {
+        showWerewolfGame(container, roche);
+      }
+    };
+  }
+
+  /* ============================================================
    * 注册插件
    * ============================================================ */
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.12.1",
+    version: "1.12.2",
     apps: [
       {
         id: "mini-games-hub",
