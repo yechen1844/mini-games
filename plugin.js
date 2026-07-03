@@ -48,6 +48,13 @@
       description: "人设与记忆驱动的狼人杀",
       emoji: "",
       isNative: true
+    },
+    {
+      id: "builtin-xp-werewolf",
+      name: "XP狼人杀",
+      description: "性癖推理社交游戏",
+      emoji: "",
+      isNative: true
     }
   ];
 
@@ -832,6 +839,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   var messageHandler = null; // 当前游戏的消息监听器（用于清理）
   var werewolfState = null; // 狼人杀游戏状态
   var wwLoadedPresets = []; // 狼人杀视图加载的预设列表
+  var xpWerewolfState = null; // XP狼人杀游戏状态
+  var xpLoadedPresets = []; // XP狼人杀视图加载的预设列表
 
   /* ============================================================
    * 辅助函数
@@ -885,11 +894,12 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return data.data.map(function (m) { return m.id; }).filter(Boolean).sort();
   }
 
-  // 统一的 AI 调用封装：如果 werewolfState 选了 API 预设，注入 provider/endpoint/apiKey/model
+  // 统一的 AI 调用封装：如果当前游戏状态选了 API 预设，注入 provider/endpoint/apiKey/model
   // 否则走默认 roche.ai.chat 行为
+  // 同时支持 werewolfState 和 xpWerewolfState（两局不会同时运行）
   async function aiChat(roche, options) {
     var opts = options || {};
-    var st = werewolfState;
+    var st = xpWerewolfState || werewolfState;
     if (st && st.apiPresetId) {
       try {
         var presets = await getApiPresets(roche);
@@ -1084,7 +1094,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var playBtn = card.querySelector('[data-action="play"]');
       if (playBtn) playBtn.onclick = function () {
         if (game.isNative) {
-          showWerewolfGame(container, roche);
+          if (game.id === 'builtin-xp-werewolf') {
+            showXpWerewolfGame(container, roche);
+          } else {
+            showWerewolfGame(container, roche);
+          }
           return;
         }
         if (game.isPlaceholder) {
@@ -4226,6 +4240,2152 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       roche.ui.toast('已保存');
       showApiPresets(container, roche);
     };
+  }
+
+  /* ============================================================
+   * XP 狼人杀 — 性癖推理社交游戏
+   * 与普通狼人杀共享预设/记忆/API 体系，但角色与机制不同：
+   * - 只有「狼人」和「好人」两种身份，无神职
+   * - 每位玩家的「XP（性癖）」是秘密信息，代替身份成为推理核心
+   * - 开局公开狼人的 XP（打乱顺序，不映射到玩家）
+   * - 出局玩家的 XP 公开，可用来确认是否为狼人
+   * - 夜杀目标的 XP 公开（夜杀目标恒为好人）
+   * ============================================================ */
+
+  // 玩家数 → 狼人数
+  function getXpWolfCount(count) {
+    switch (count) {
+      case 4: return 1;
+      case 5: return 1;
+      case 6: return 2;
+      case 7: return 2;
+      case 8: return 3;
+      case 9: return 3;
+      default: return 1;
+    }
+  }
+
+  // 角色构成文字
+  function getXpCompositionText(count) {
+    var wolves = getXpWolfCount(count);
+    var good = count - wolves;
+    return count + '人：' + wolves + '狼人 + ' + good + '好人（无神职，仅凭XP推理）';
+  }
+
+  // 角色名映射
+  function xpRoleLabel(role) {
+    return role === 'wolf' ? '狼人' : '好人';
+  }
+
+  // 入口
+  async function showXpWerewolfGame(container, roche) {
+    if (!xpWerewolfState) {
+      xpWerewolfState = { phase: "setup" };
+    }
+    if (xpWerewolfState.phase === "play") {
+      renderXpWerewolfPlay(container, roche);
+    } else {
+      await renderXpWerewolfSetup(container, roche);
+    }
+  }
+
+  // 渲染设置界面
+  async function renderXpWerewolfSetup(container, roche) {
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">XP狼人杀</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">' +
+      '<div class="mg-form-wrap">' +
+      '<div class="mg-field">' +
+      '<div class="mg-hint" style="margin-bottom:14px;line-height:1.7;">' +
+      '<b style="color:#c9a961;font-family:Georgia,serif;letter-spacing:0.04em;">游戏规则</b><br>' +
+      '每位玩家都有一个秘密的 XP（性癖）。狼人的 XP 在开局被公开（打乱顺序，不映射到玩家）。' +
+      '好人要通过发言、投票和出局玩家的 XP 公开，推理出谁是狼人。' +
+      '投票出局的玩家 XP 公开；夜杀目标的 XP 也公开。狼人 >= 好人则狼人胜，狼人全灭则好人胜。' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">预设</label>' +
+      '<select class="mg-input" id="xp-preset"><option value="">加载中...</option></select>' +
+      '<div class="mg-hint">选择预设后会自动填充下方角色；仍可手动调整</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">参与角色 (多选)</label>' +
+      '<div class="mg-check-list" id="xp-chars"><div class="mg-loading">加载中...</div></div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">玩家人数</label>' +
+      '<select class="mg-input" id="xp-count">' +
+      '<option value="4">4人</option>' +
+      '<option value="5">5人</option>' +
+      '<option value="6">6人</option>' +
+      '<option value="7">7人</option>' +
+      '<option value="8">8人</option>' +
+      '<option value="9">9人</option>' +
+      '</select>' +
+      '<div class="mg-hint" id="xp-composition"></div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">AI 演算模式</label>' +
+      '<select class="mg-input" id="xp-mode">' +
+      '<option value="batch">批量模式（一次演算多个 char）</option>' +
+      '<option value="polling">单个轮询模式（每个 char 独立演算，视野隔离）</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label"><input type="checkbox" id="xp-spectator"> 旁观模式</label>' +
+      '<div class="mg-hint">开启后你以第三人称旁观：所有角色由 AI 操控，你以第三人称旁观全场（含心声与夜间行动）</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">API 预设</label>' +
+      '<select class="mg-input" id="xp-api-preset"><option value="">加载中...</option></select>' +
+      '<div class="mg-hint">选择已配置的 API 预设后，所有 AI 调用将走该 API；不选则使用 Roche 默认 AI。可在「API 设置」中创建预设</div>' +
+      '</div>' +
+      '<div class="mg-form-actions">' +
+      '<button class="mg-btn mg-btn-primary" data-action="start">开始游戏</button>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    container.innerHTML = html;
+
+    // 绑定头部按钮
+    container.querySelector('[data-action="back"]').onclick = function () {
+      xpWerewolfState = null;
+      showHub(container, roche);
+    };
+    container.querySelector('[data-action="close"]').onclick = function () {
+      roche.ui.closeApp();
+    };
+
+    // 检查是否有未结束的存档
+    try {
+      var saved = await roche.storage.get('ww-xp-save');
+      if (saved) {
+        var contentEl = container.querySelector('.mg-content');
+        var formWrap = container.querySelector('.mg-form-wrap');
+        if (contentEl && formWrap) {
+          var resumeBar = document.createElement('div');
+          resumeBar.className = 'mg-form-actions';
+          resumeBar.style.marginBottom = '18px';
+          resumeBar.style.padding = '14px 16px';
+          resumeBar.style.background = 'linear-gradient(180deg, rgba(58,53,32,0.18) 0%, rgba(122,46,58,0.10) 100%)';
+          resumeBar.style.border = '1px solid rgba(201,169,97,0.35)';
+          resumeBar.style.borderRadius = '3px';
+          resumeBar.innerHTML = '<div style="margin-bottom:10px;color:#c9a961;font-family:Georgia,serif;letter-spacing:0.05em;">检测到上次未结束的游戏</div>' +
+            '<button class="mg-btn mg-btn-primary" data-action="resume">继续上次游戏</button>';
+          contentEl.insertBefore(resumeBar, formWrap);
+          resumeBar.querySelector('[data-action="resume"]').onclick = async function () {
+            var loaded = await loadXpWerewolfState(roche);
+            if (loaded && xpWerewolfState && xpWerewolfState.phase === 'play') {
+              if (xpWerewolfState.gameOver) {
+                renderXpWerewolfPlay(container, roche);
+                return;
+              }
+              if (xpWerewolfState.subPhase) {
+                xpWerewolfState.gameLoopRunning = true;
+                renderXpWerewolfPlay(container, roche);
+                startXpGameLoop(container, roche);
+              } else {
+                renderXpWerewolfPlay(container, roche);
+              }
+            } else {
+              roche.ui.toast('存档无法恢复');
+            }
+          };
+        }
+      }
+    } catch (e) { /* 忽略存档检测错误 */ }
+
+    // 加载预设
+    var presetSel = container.querySelector('#xp-preset');
+    try {
+      xpLoadedPresets = await getPresets(roche);
+    } catch (e) {
+      xpLoadedPresets = [];
+    }
+    if (!Array.isArray(xpLoadedPresets)) xpLoadedPresets = [];
+    var presetOpts = '<option value="">（不使用预设）</option>';
+    xpLoadedPresets.forEach(function (p) {
+      presetOpts += '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>';
+    });
+    presetSel.innerHTML = presetOpts;
+
+    // 加载 API 预设列表
+    var apiPresetSel = container.querySelector('#xp-api-preset');
+    var xpLoadedApiPresets = [];
+    try {
+      xpLoadedApiPresets = await getApiPresets(roche);
+    } catch (e) {
+      xpLoadedApiPresets = [];
+    }
+    if (!Array.isArray(xpLoadedApiPresets)) xpLoadedApiPresets = [];
+    var apiOpts = '<option value="">（使用 Roche 默认 AI）</option>';
+    xpLoadedApiPresets.forEach(function (p) {
+      apiOpts += '<option value="' + esc(p.id) + '">' + esc(p.name || '未命名') + ' · ' + esc(p.model || '') + '</option>';
+    });
+    apiPresetSel.innerHTML = apiOpts;
+    if (xpWerewolfState && xpWerewolfState.apiPresetId) {
+      apiPresetSel.value = xpWerewolfState.apiPresetId;
+    }
+
+    // 预设变化时自动勾选角色
+    presetSel.onchange = function () {
+      var pid = presetSel.value;
+      if (!pid) return;
+      var preset = xpLoadedPresets.find(function (p) { return p.id === pid; });
+      if (!preset) return;
+      var charIds = Array.isArray(preset.charIds) ? preset.charIds : [];
+      var checks = container.querySelectorAll('#xp-chars input[type="checkbox"]');
+      checks.forEach(function (cb) {
+        cb.checked = (charIds.indexOf(cb.value) !== -1);
+      });
+    };
+
+    // 加载角色列表
+    var charsBox = container.querySelector('#xp-chars');
+    var characters = [];
+    try {
+      characters = await roche.character.list();
+    } catch (e) {
+      characters = [];
+    }
+    if (!Array.isArray(characters)) characters = [];
+    var charsHtml = '';
+    if (characters.length === 0) {
+      charsHtml = '<div class="mg-loading">暂无角色</div>';
+    } else {
+      characters.forEach(function (c) {
+        var cid = esc(c.id || '');
+        var cname = esc(c.handle || c.name || '未命名');
+        charsHtml +=
+          '<div class="mg-check-item">' +
+          '<label><input type="checkbox" value="' + cid + '">' + cname + '</label>' +
+          '</div>';
+      });
+    }
+    charsBox.innerHTML = charsHtml;
+
+    // 玩家人数变化时更新角色构成提示
+    var countSel = container.querySelector('#xp-count');
+    countSel.value = '6';
+    var compositionEl = container.querySelector('#xp-composition');
+    function updateComposition() {
+      var count = parseInt(countSel.value, 10);
+      compositionEl.textContent = getXpCompositionText(count);
+    }
+    countSel.onchange = updateComposition;
+    updateComposition();
+
+    // 默认演算模式 polling
+    container.querySelector('#xp-mode').value = 'polling';
+
+    // 开始游戏
+    container.querySelector('[data-action="start"]').onclick = async function () {
+      var presetId = presetSel.value;
+      var preset = presetId ? xpLoadedPresets.find(function (p) { return p.id === presetId; }) : null;
+      var checkedIds = [];
+      var checks = charsBox.querySelectorAll('input[type="checkbox"]:checked');
+      checks.forEach(function (cb) { checkedIds.push(cb.value); });
+      var count = parseInt(countSel.value, 10);
+      var mode = container.querySelector('#xp-mode').value;
+      var spectator = container.querySelector('#xp-spectator') ? container.querySelector('#xp-spectator').checked : false;
+      var apiPresetId = container.querySelector('#xp-api-preset') ? container.querySelector('#xp-api-preset').value : '';
+
+      if (spectator) {
+        if (checkedIds.length !== count) {
+          roche.ui.toast("旁观模式需要选择 " + count + " 个角色（共 " + count + " 人，你不参与）");
+          return;
+        }
+      } else {
+        if (checkedIds.length !== count - 1) {
+          roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
+          return;
+        }
+      }
+
+      // 开新局前清除旧存档
+      await clearXpWerewolfSave(roche);
+
+      // 获取用户人设
+      var userPersona = null;
+      try {
+        userPersona = await roche.persona.getActiveUserPersona();
+      } catch (e) {
+        userPersona = null;
+      }
+      var userPersonaText = (userPersona && (userPersona.persona || userPersona.bio)) || "";
+      var userName = (userPersona && (userPersona.handle || userPersona.name)) || "你";
+      var userAvatar = (userPersona && userPersona.avatar) || "";
+
+      // 获取角色详情
+      var charDetails = [];
+      for (var i = 0; i < checkedIds.length; i++) {
+        try {
+          var cd = await roche.character.get(checkedIds[i]);
+          charDetails.push(cd);
+        } catch (e) {
+          charDetails.push({ id: checkedIds[i], name: '角色' + checkedIds[i] });
+        }
+      }
+
+      // 构建玩家列表
+      var allPlayers = [];
+      if (!spectator) {
+        allPlayers.push({
+          id: "user",
+          name: userName,
+          realName: (userPersona && userPersona.name) || "",
+          handle: (userPersona && userPersona.handle) || "",
+          isUser: true,
+          personaText: userPersonaText,
+          avatar: userAvatar
+        });
+      }
+      charDetails.forEach(function (cd) {
+        allPlayers.push({
+          id: cd.id,
+          name: cd.handle || cd.name || ('角色' + cd.id),
+          realName: cd.name || "",
+          handle: cd.handle || "",
+          isUser: false,
+          personaText: cd.persona || cd.bio || "",
+          avatar: cd.avatar || ""
+        });
+      });
+
+      // 真随机：座位洗牌
+      var seatOrder = [];
+      for (var s = 0; s < count; s++) seatOrder.push(s);
+      shuffleArray(seatOrder);
+
+      var userSeat = 0;
+      var userRole = "";
+      for (var p = 0; p < count; p++) {
+        var playerIdx = seatOrder[p];
+        var player = allPlayers[playerIdx];
+        player.seat = p + 1;
+        player.role = 'good'; // 初始为好人，狼人稍后在 runXpNight0 中分配
+        player.alive = true;
+        player.xp = ''; // 待 Night0 生成
+        player.eliminatedDay = null;
+        if (player.isUser) {
+          userSeat = p + 1;
+        }
+      }
+
+      // 构建 conversation → char 映射
+      var convMap = {};
+      try {
+        var conversations = await roche.conversation.list();
+        if (Array.isArray(conversations)) {
+          conversations.forEach(function (conv) {
+            var convId = conv.id || conv.conversationId;
+            if (!convId) return;
+            if (conv.isGroup) {
+              var memberIds = conv.members || [];
+              if (Array.isArray(memberIds) && memberIds.length > 0) {
+                allPlayers.forEach(function (p) {
+                  if (!p.isUser && memberIds.indexOf(p.id) !== -1) {
+                    if (!convMap[p.id]) convMap[p.id] = [];
+                    convMap[p.id].push(convId);
+                  }
+                });
+              } else if (conv.memberProfiles && Array.isArray(conv.memberProfiles)) {
+                var profileIds = conv.memberProfiles.map(function (m) { return m.id; });
+                allPlayers.forEach(function (p) {
+                  if (!p.isUser && profileIds.indexOf(p.id) !== -1) {
+                    if (!convMap[p.id]) convMap[p.id] = [];
+                    convMap[p.id].push(convId);
+                  }
+                });
+              }
+            } else if (conv.contactId) {
+              if (!convMap[conv.contactId]) convMap[conv.contactId] = [];
+              convMap[conv.contactId].push(convId);
+            }
+          });
+        }
+      } catch (e) {
+        convMap = {};
+      }
+
+      var wolfCount = getXpWolfCount(count);
+
+      xpWerewolfState = {
+        phase: "play",
+        day: 0,
+        mode: mode,
+        spectator: spectator,
+        preset: preset || null,
+        apiPresetId: apiPresetId || null,
+        count: count,
+        wolfCount: wolfCount,
+        players: allPlayers,
+        userSeat: spectator ? 0 : userSeat,
+        userRole: '', // 待 Night0 分配
+        publicLog: [],
+        gamelogLines: [],
+        charHistory: {},
+        revealedWolfXps: [],
+        eliminatedPlayers: [],
+        pendingDeaths: [],
+        subPhase: null,
+        gameOver: false,
+        winner: null,
+        speakIndex: 0,
+        convMap: convMap,
+        memoryCache: {},
+        gameLoopRunning: false,
+        debugLog: [],
+        charMemories: null,
+        _gamelogScroll: 0,
+        _resumePhase: null,
+        lastEliminatedWasWolf: null
+      };
+
+      saveXpWerewolfState(roche);
+      renderXpWerewolfPlay(container, roche);
+    };
+  }
+
+  // 渲染游戏界面（play 阶段）
+  function renderXpWerewolfPlay(container, roche) {
+    var st = xpWerewolfState;
+
+    if (st.gameOver) {
+      renderXpGameOver(container, roche);
+      return;
+    }
+
+    var seatsHtml = '';
+    st.players.forEach(function (p) {
+      var cls = 'mg-seat-card';
+      if (!p.alive) cls += ' dead';
+      if (p.isUser) cls += ' is-user';
+      var status = p.alive ? '存活' : '已出局';
+      if (st.spectator) status += ' · ' + xpRoleLabel(p.role);
+      if (p.xp && !p.alive) status += ' · XP: ' + p.xp;
+      seatsHtml +=
+        '<div class="' + cls + '">' +
+        '<div class="mg-seat-num">' + p.seat + '号</div>' +
+        '<div class="mg-seat-name">' + esc(p.name) + '</div>' +
+        '<div class="mg-seat-status">' + esc(status) + '</div>' +
+        '</div>';
+    });
+
+    var logHtml = '';
+    if (Array.isArray(st.gamelogLines)) {
+      st.gamelogLines.forEach(function (line) {
+        if (line.cls === 'heart' && !st.spectator) return;
+        logHtml += formatGamelogLineHTML(line);
+      });
+    }
+
+    // 阶段标签
+    var phaseName = '';
+    if (st.subPhase === 'night0') phaseName = 'XP收集';
+    else if (st.subPhase === 'night') phaseName = '夜晚';
+    else if (st.subPhase === 'day_speak') phaseName = '白天发言';
+    else if (st.subPhase === 'day_vote') phaseName = '投票';
+    var phaseLabel = '当前：第' + st.day + '天' + (phaseName ? ' ' + phaseName : ' 准备中');
+
+    // 公开的狼人 XP 列表
+    var wolfXpsHtml = '';
+    if (st.revealedWolfXps && st.revealedWolfXps.length > 0) {
+      wolfXpsHtml = '<div class="mg-field" style="margin-bottom:14px;padding:12px 14px;background:linear-gradient(180deg,rgba(122,46,58,0.10) 0%,rgba(13,13,26,0.4) 100%);border:1px solid rgba(139,58,74,0.4);border-radius:3px;">' +
+        '<div style="color:#c4788a;font-family:Georgia,serif;font-size:12px;letter-spacing:0.12em;margin-bottom:8px;">公开的狼人 XP（打乱顺序，不映射到玩家）</div>' +
+        st.revealedWolfXps.map(function (xp, i) {
+          return '<div style="color:#e8e4d8;font-size:13px;padding:3px 0;border-bottom:1px dashed rgba(139,58,74,0.2);">' + (i + 1) + '. ' + esc(xp) + '</div>';
+        }).join('') +
+        '</div>';
+    }
+
+    // 按钮区
+    var buttonHtml = '';
+    if (st.gameLoopRunning || st.subPhase) {
+      buttonHtml = '<div class="mg-hint">游戏进行中…</div>';
+    } else if (!st.gameOver) {
+      buttonHtml = '<button class="mg-btn mg-btn-primary" data-action="start-xp">开始XP收集</button>';
+    }
+
+    // 狼人同伴行
+    var fellowWolvesLine = '';
+    if (!st.spectator && st.userRole === 'wolf') {
+      var userPlayer = st.players.find(function (p) { return p.isUser; });
+      var fellowWolves = st.players.filter(function (p) {
+        return p.role === 'wolf' && !p.isUser;
+      });
+      if (fellowWolves.length > 0) {
+        fellowWolvesLine = '<div>狼人同伴：<b>' + fellowWolves.map(function (p) { return p.seat + '号'; }).join('、') + '</b></div>';
+      }
+    }
+
+    var roleDisplay = st.spectator
+      ? '<div class="mg-role-name">旁观模式 — 上帝视角</div><div class="mg-role-skill">你以第三人称旁观全场，所有角色由 AI 操控</div>'
+      : '<div>你的座位号：<b>' + st.userSeat + '</b></div>' +
+        (st.userRole ? '<div>你的身份：<b class="mg-role-name">' + esc(xpRoleLabel(st.userRole)) + '</b></div>' : '') +
+        (st.userRole && userPlayer && userPlayer.xp ? '<div>你的XP：<b>' + esc(userPlayer.xp) + '</b></div>' : '') +
+        fellowWolvesLine;
+
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">XP狼人杀 · 第 ' + st.day + ' 天</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">' +
+      '<div class="mg-form-wrap">' +
+      '<div class="mg-role-card">' +
+      roleDisplay +
+      '</div>' +
+      '<div class="mg-phase-label" id="xp-phase-label">' + esc(phaseLabel) + '</div>' +
+      wolfXpsHtml +
+      '<div class="mg-seats-grid" id="xp-seats-grid">' + seatsHtml + '</div>' +
+      '<div class="mg-gamelog" id="xp-gamelog">' + logHtml + '</div>' +
+      '<div id="xp-action-panel"></div>' +
+      '<div class="mg-form-actions">' + buttonHtml + '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div id="xp-debug-panel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(5,7,15,0.72);z-index:9999;align-items:center;justify-content:center;">' +
+      '<div style="display:flex;flex-direction:column;width:90%;max-width:640px;height:75%;background:linear-gradient(160deg,#11172a,#0a0e1a);border:1px solid rgba(201,169,97,0.4);border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.7);overflow:hidden;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(201,169,97,0.2);">' +
+      '<span style="color:#c9a961;font-weight:600;font-family:Georgia,serif;letter-spacing:0.05em;">系统日志</span>' +
+      '<button class="mg-btn mg-btn-ghost mg-btn-sm" data-action="close-debug">关闭日志</button>' +
+      '</div>' +
+      '<div id="xp-debug-panel-content" style="flex:1;overflow-y:auto;padding:12px 16px;"></div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    container.innerHTML = html;
+    st._container = container;
+
+    // 双击标题打开系统日志
+    var titleEl = container.querySelector('.mg-title');
+    if (titleEl) {
+      titleEl.style.cursor = 'pointer';
+      titleEl.title = '双击打开系统日志';
+      titleEl.ondblclick = function () {
+        var panel = container.querySelector('#xp-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderXpDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
+
+    // 恢复 gamelog 滚动位置
+    var logEl = container.querySelector('#xp-gamelog');
+    if (logEl) {
+      if (st._gamelogScroll != null) {
+        logEl.scrollTop = st._gamelogScroll;
+      } else {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      if (!logEl._xpScrollBound) {
+        logEl.addEventListener('scroll', function () {
+          if (xpWerewolfState) xpWerewolfState._gamelogScroll = logEl.scrollTop;
+        });
+        logEl._xpScrollBound = true;
+      }
+    }
+
+    // 返回大厅
+    container.querySelector('[data-action="back"]').onclick = async function () {
+      var ok = await roche.ui.confirm({
+        title: '退出游戏',
+        message: '确定退出本局？'
+      });
+      if (!ok) return;
+      xpWerewolfState = null;
+      showHub(container, roche);
+    };
+    container.querySelector('[data-action="close"]').onclick = function () {
+      roche.ui.closeApp();
+    };
+
+    // 系统日志面板
+    var closeDebugBtn = container.querySelector('[data-action="close-debug"]');
+    if (closeDebugBtn) {
+      closeDebugBtn.onclick = function () {
+        var panel = container.querySelector('#xp-debug-panel');
+        if (panel) panel.style.display = 'none';
+      };
+    }
+
+    // "译"切换事件委托
+    if (!container._xpTransDelegation) {
+      container.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('mg-trans-toggle')) {
+          var id = t.getAttribute('data-tr');
+          var zh = id ? document.getElementById(id) : null;
+          if (zh) {
+            var showDisplay = zh.getAttribute('data-display') || 'inline';
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? showDisplay : 'none';
+          }
+        }
+      });
+      container._xpTransDelegation = true;
+    }
+
+    // 开始XP收集按钮 → 启动游戏循环
+    var startBtn = container.querySelector('[data-action="start-xp"]');
+    if (startBtn) {
+      startBtn.onclick = function () {
+        st.gameLoopRunning = true;
+        startXpGameLoop(container, roche);
+      };
+    }
+  }
+
+  // 重新渲染 play 屏幕（增量更新座位与阶段标签）
+  function rerenderXpPlay(container, roche) {
+    var st = xpWerewolfState;
+    if (!st) return;
+
+    var seatsGridEl = container.querySelector('#xp-seats-grid');
+    if (seatsGridEl) {
+      var seatsHtml = '';
+      st.players.forEach(function (p) {
+        var cls = 'mg-seat-card';
+        if (!p.alive) cls += ' dead';
+        if (p.isUser) cls += ' is-user';
+        var status = p.alive ? '存活' : '已出局';
+        if (st.spectator) status += ' · ' + xpRoleLabel(p.role);
+        if (p.xp && !p.alive) status += ' · XP: ' + p.xp;
+        seatsHtml +=
+          '<div class="' + cls + '">' +
+          '<div class="mg-seat-num">' + p.seat + '号</div>' +
+          '<div class="mg-seat-name">' + esc(p.name) + '</div>' +
+          '<div class="mg-seat-status">' + esc(status) + '</div>' +
+          '</div>';
+      });
+      seatsGridEl.innerHTML = seatsHtml;
+    }
+
+    var phaseLabelEl = container.querySelector('#xp-phase-label');
+    if (phaseLabelEl) {
+      var phaseName = '';
+      if (st.subPhase === 'night0') phaseName = 'XP收集';
+      else if (st.subPhase === 'night') phaseName = '夜晚';
+      else if (st.subPhase === 'day_speak') phaseName = '白天发言';
+      else if (st.subPhase === 'day_vote') phaseName = '投票';
+      var phaseLabel = '当前：第' + st.day + '天' + (phaseName ? ' ' + phaseName : ' 准备中');
+      phaseLabelEl.textContent = phaseLabel;
+    }
+  }
+
+  // 向 gamelog 追加一行
+  function appendXpGamelog(container, text, cls, zhText) {
+    var st = xpWerewolfState;
+    if (!st.gamelogLines) st.gamelogLines = [];
+    st.gamelogLines.push({ text: text, cls: cls || 'msg', zhText: zhText || '' });
+    if (cls !== 'heart' && cls !== 'private' && cls !== 'transition') {
+      st.publicLog.push(text);
+    }
+    var logEl = container.querySelector('#xp-gamelog');
+    if (logEl) {
+      var wasNearBottom = (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight) < 80;
+      var div = document.createElement('div');
+      div.className = 'mg-gamelog-line ' + (cls === 'private' ? 'dm' : (cls || 'msg'));
+      if (zhText && zhText.trim() && zhText !== text) {
+        div.innerHTML = formatTranslatable(text, zhText);
+      } else {
+        div.textContent = text;
+      }
+      logEl.appendChild(div);
+      if (wasNearBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+
+  // 追加调试日志
+  function appendXpDebug(type, charName, text, zhText) {
+    var st = xpWerewolfState;
+    if (!st) return;
+    if (!st.debugLog) st.debugLog = [];
+    st.debugLog.push({ type: type, charName: charName || '', text: text || '', zhText: zhText || '' });
+    if (st.spectator && st._container && type === 'heart' && text) {
+      appendXpGamelog(st._container, '[' + (charName || '') + ' 心声] ' + text, 'heart', zhText || '');
+    }
+  }
+
+  // 渲染调试日志面板内容
+  function renderXpDebugPanelContent(container) {
+    var st = xpWerewolfState;
+    if (!st || !st.debugLog) return;
+    var contentEl = container.querySelector('#xp-debug-panel-content');
+    if (!contentEl) return;
+    var html = '';
+    st.debugLog.forEach(function (entry) {
+      var color = '#6a6557';
+      if (entry.type === 'prompt') color = '#5b7fa8';
+      else if (entry.type === 'response') color = '#e8e4d8';
+      else if (entry.type === 'thinking') color = '#7a8fb5';
+      else if (entry.type === 'heart') color = '#b57fa0';
+      else if (entry.type === 'action') color = '#c9a961';
+      else if (entry.type === 'system') color = '#6a6557';
+      var label = '[' + entry.type + '] ' + debugEscape(entry.charName || '');
+      var textHtml;
+      if (entry.type === 'heart' && entry.zhText && entry.zhText.trim() && entry.zhText !== entry.text) {
+        var id = 'tr-' + Math.random().toString(36).slice(2, 8);
+        textHtml = debugEscape(entry.text) + ' <span class="mg-trans-toggle" data-tr="' + id + '" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-left:6px;letter-spacing:0.05em;">译</span>' +
+          '<span class="mg-trans-zh" id="' + id + '" style="display:none;color:#9a8f7a;margin-left:6px;font-style:italic;">（' + debugEscape(entry.zhText) + '）</span>';
+      } else {
+        textHtml = '<span>' + debugEscape(entry.text) + '</span>';
+      }
+      html += '<div style="margin:6px 0;padding:6px 0;border-bottom:1px solid rgba(201,169,97,0.12);">' +
+        '<div style="color:' + color + ';font-size:11px;font-weight:600;letter-spacing:0.03em;">' + label + '</div>' +
+        '<div style="margin:3px 0 0;word-break:break-word;font-family:\'Cascadia Code\',\'Fira Code\',monospace;font-size:11px;color:#9a8f7a;line-height:1.5;">' + textHtml + '</div>' +
+        '</div>';
+    });
+    contentEl.innerHTML = html;
+    contentEl.scrollTop = contentEl.scrollHeight;
+  }
+
+  // 追加 char 历史
+  function appendXpCharHistory(charId, round, phase, type, content) {
+    var st = xpWerewolfState;
+    if (!st.charHistory) st.charHistory = {};
+    if (!st.charHistory[charId]) st.charHistory[charId] = [];
+    st.charHistory[charId].push({ round: round, phase: phase, type: type, content: content });
+  }
+
+  // 保存/加载/清除存档
+  function saveXpWerewolfState(roche) {
+    if (!xpWerewolfState || !roche || !roche.storage) return;
+    try {
+      roche.storage.set('ww-xp-save', JSON.stringify(xpWerewolfState));
+    } catch (e) { /* 忽略 */ }
+  }
+
+  async function loadXpWerewolfState(roche) {
+    if (!roche || !roche.storage) return false;
+    try {
+      var s = await roche.storage.get('ww-xp-save');
+      if (s) {
+        xpWerewolfState = JSON.parse(s);
+        xpWerewolfState._resumePhase = xpWerewolfState.subPhase || null;
+        return true;
+      }
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+
+  async function clearXpWerewolfSave(roche) {
+    if (!roche || !roche.storage) return;
+    try {
+      if (typeof roche.storage.delete === 'function') {
+        await roche.storage.delete('ww-xp-save');
+      } else {
+        await roche.storage.set('ww-xp-save', null);
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  // 游戏结束判定
+  function checkXpGameOver(roche) {
+    var st = xpWerewolfState;
+    var aliveWolves = st.players.filter(function (p) { return p.alive && p.role === 'wolf'; }).length;
+    var aliveGood = st.players.filter(function (p) { return p.alive && p.role === 'good'; }).length;
+    if (aliveWolves === 0) {
+      st.gameOver = true;
+      st.winner = '好人';
+      return true;
+    }
+    if (aliveWolves >= aliveGood) {
+      st.gameOver = true;
+      st.winner = '狼人';
+      return true;
+    }
+    return false;
+  }
+
+  /* ---- 记忆加载 ---- */
+
+  async function loadMemoryForCharXp(roche, charId) {
+    var st = xpWerewolfState;
+    if (!st.preset || !Array.isArray(st.preset.sessions) || st.preset.sessions.length === 0) {
+      return { core: '', facts: '', shortTerm: '' };
+    }
+    var convMap = st.convMap || {};
+    var applicableConvIds = convMap[charId] || [];
+    if (applicableConvIds.length === 0) {
+      return { core: '', facts: '', shortTerm: '' };
+    }
+    var core = '';
+    var facts = '';
+    var shortTerm = '';
+    for (var i = 0; i < st.preset.sessions.length; i++) {
+      var session = st.preset.sessions[i];
+      if (applicableConvIds.indexOf(session.conversationId) === -1) continue;
+      try {
+        if (session.mountCore || session.factCount > 0) {
+          var lt = await roche.memory.getLongTerm({ conversationId: session.conversationId, limit: 50 });
+          if (lt) {
+            if (session.mountCore && lt.core && lt.core.summary) {
+              core += lt.core.summary + '\n';
+            }
+            if (session.factCount > 0 && Array.isArray(lt.facts)) {
+              var sliced = lt.facts.slice(0, session.factCount);
+              sliced.forEach(function (item) {
+                facts += (item.summaryText || item.action || '') + '\n';
+              });
+            }
+          }
+        }
+        if (session.shortTermCount > 0) {
+          var stArr = await roche.memory.getShortTerm({ conversationId: session.conversationId, limit: session.shortTermCount });
+          if (Array.isArray(stArr)) {
+            stArr.forEach(function (item) {
+              shortTerm += (item.text || '') + '\n';
+            });
+          }
+        }
+      } catch (e) { /* 忽略 */ }
+    }
+    return { core: core, facts: facts, shortTerm: shortTerm };
+  }
+
+  async function getCharMemoryTextXp(roche, player) {
+    var st = xpWerewolfState;
+    if (player.isUser) return '';
+    if (st.memoryCache && st.memoryCache[player.id]) {
+      return st.memoryCache[player.id];
+    }
+    var mem = await loadMemoryForCharXp(roche, player.id);
+    var text = (mem.core + '\n' + mem.facts + '\n' + mem.shortTerm).trim();
+    if (!st.memoryCache) st.memoryCache = {};
+    st.memoryCache[player.id] = text;
+    return text;
+  }
+
+  // 构建玩家名单
+  function buildXpPlayerRoster(excludePlayerId, userOverride) {
+    var st = xpWerewolfState;
+    if (!st || !st.players) return '';
+    var sorted = st.players.slice().sort(function (a, b) { return a.seat - b.seat; });
+    var lines = [];
+    sorted.forEach(function (p) {
+      var display = p.name || '';
+      var real = p.realName || '';
+      var status = p.alive ? '存活' : '已出局';
+      var namePart;
+      if (excludePlayerId != null && p.id === excludePlayerId) {
+        namePart = '你';
+      } else if (userOverride && p.isUser) {
+        namePart = userOverride;
+      } else {
+        namePart = display;
+      }
+      var realPart = real ? '（真实姓名：' + real + '）' : '';
+      lines.push(p.seat + '号：' + namePart + realPart + ' — ' + status);
+    });
+    return '【本局玩家名单（座位号 + 展示名 + 真实姓名）】\n' + lines.join('\n');
+  }
+
+  // 构建已出局玩家及其 XP 的文本（用于提示词）
+  function buildEliminatedXpText() {
+    var st = xpWerewolfState;
+    if (!st.eliminatedPlayers || st.eliminatedPlayers.length === 0) return '(无)';
+    return st.eliminatedPlayers.map(function (e) {
+      return e.seat + '号(' + e.name + ') - ' + xpRoleLabel(e.role) + ' - XP: ' + e.xp + ' - 第' + e.day + '天' + e.cause;
+    }).join('\n');
+  }
+
+  /* ---- 提示词构建 ---- */
+
+  // 构建 polling 模式下的单 char 提示词（发言/投票/夜杀）
+  async function buildXpCharPrompt(roche, player, context) {
+    var st = xpWerewolfState;
+    var memoryText = await getCharMemoryTextXp(roche, player);
+
+    var publicLogText = (st.publicLog && st.publicLog.length > 0)
+      ? st.publicLog.join('\n') : '(无)';
+
+    var ownHistory = '(无)';
+    if (st.charHistory[player.id] && st.charHistory[player.id].length > 0) {
+      ownHistory = st.charHistory[player.id].map(function (h) {
+        return '[第' + h.round + '天 ' + h.phase + '] ' + h.content;
+      }).join('\n');
+    }
+
+    var revealedWolfXpsText = (st.revealedWolfXps && st.revealedWolfXps.length > 0)
+      ? st.revealedWolfXps.map(function (xp, i) { return (i + 1) + '. ' + xp; }).join('\n')
+      : '(尚未公开)';
+
+    var eliminatedText = buildEliminatedXpText();
+
+    // 狼人互知同伴
+    var fellowWolves = '';
+    if (player.role === 'wolf') {
+      var wolves = st.players.filter(function (p) {
+        return p.role === 'wolf' && p.id !== player.id && p.alive;
+      });
+      if (wolves.length > 0) {
+        fellowWolves = '你的狼人同伴：' + wolves.map(function (p) { return p.seat + '号'; }).join('、') + '。\n';
+      }
+    }
+
+    var systemContent =
+      '【人格优先级宣言】\n' +
+      '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系——第二身份才是"本局游戏的玩家"。你的说话方式（语气、措辞、节奏、情感温度）是人格的产物，游戏不能改变它。游戏胜负是次要的，首要是符合你自身人设。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。\n' +
+      '记忆和人设同等重要。记忆与经历对char的影响是真实存在的——它们塑造了现在的你。初始人设是起点，记忆和经历才是决定你当下行为的第一依据。如果初始人设和记忆冲突，记忆优先。\n\n' +
+      '【这只是游戏】\n' +
+      '这就是一群朋友在线上玩一局 XP 狼人杀而已。不是生死任务，不是战场。放轻松，像和朋友打游戏一样。不要用"任务""战场""使命"这类词。\n\n' +
+      '【XP 狼人杀规则】\n' +
+      '- 每位玩家有一个秘密的 XP（性癖/床上喜好），只有自己和主持人知道\n' +
+      '- 狼人的 XP 在开局被公开（打乱顺序，不映射到玩家），这是好人推理的唯一线索\n' +
+      '- 投票出局的玩家 XP 公开：若匹配公开的狼人 XP，则是狼人；否则是好人\n' +
+      '- 夜杀目标的 XP 也公开（夜杀目标恒为好人，所以夜杀目标的 XP 不会匹配狼人 XP）\n' +
+      '- 好人目标：通过发言、投票和 XP 公开，找出谁的 XP 属于公开的狼人 XP 列表\n' +
+      '- 狼人目标：伪装成好人，误导好人投票彼此，夜杀好人\n' +
+      '- 胜负：狼人全灭则好人胜；狼人数 >= 好人数则狼人胜\n\n' +
+      '【高智商演绎】\n' +
+      '- 狼人：不要自爆身份。你的 XP 在公开列表里，但没人知道是谁的——利用这一点。学会伪装、甩锅、带节奏、装好人。发言要经得起逻辑推敲。\n' +
+      '- 好人：分析发言漏洞，关注谁在为谁辩护、谁在带节奏。已出局玩家的 XP 提供线索——若某出局的XP不在狼人XP列表里，他是好人；若在列表里，他是狼人。\n' +
+      '- 所有人：发言要有逻辑，要会怀疑。不要傻乎乎地暴露信息。聪明人会骗人、会演、会藏。\n' +
+      '- 但一切伪装和欺骗都必须用你的人格声音说出来，不能变成"游戏套话"。\n\n' +
+      '【你的角色信息】\n' +
+      '名字：' + player.name + '\n' +
+      '座位号：' + player.seat + '\n' +
+      '身份：' + xpRoleLabel(player.role) + '\n' +
+      '你的 XP：' + (player.xp || '(未生成)') + '\n' +
+      fellowWolves +
+      '\n' + buildXpPlayerRoster(player.id) + '\n' +
+      '\n【公开的狼人 XP（打乱顺序，不映射到玩家）】\n' + revealedWolfXpsText + '\n' +
+      '\n【已出局玩家及其 XP】\n' + eliminatedText + '\n' +
+      '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
+      '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
+      '\n【公开事件记录（仅含公开信息）】\n' + publicLogText + '\n' +
+      '\n【你的个人历史（仅含你自己的心声、行动、发言、投票）】\n' + ownHistory + '\n' +
+      '\n【视野隔离铁律】\n' +
+      '- 你绝对不能假设自己知道未给出的信息（他人身份、他人 XP、夜间行动）。\n' +
+      '- 只能基于公开记录和你自己的行动历史做决策。\n' +
+      '- 严禁开天眼，严禁读取上帝视角。\n' +
+      (player.role === 'wolf' ? '- 狼人互知同伴是规则允许的唯一例外。\n' : '') +
+      '\n【思维链要求（写在 thinking 字段内）】\n' +
+      'thinking 字段是你的推理过程，不要把最终发言或行动的原文写进 thinking。在做出决策前，你必须在 thinking 字段内完成以下思维链：\n' +
+      '1. 人设全貌加载：我是谁？我怎么说话（语气、措辞、节奏、口癖）？\n' +
+      '2. 记忆回溯：记忆和人设同等重要。我和user现在是什么关系？写下"经过记忆塑造后的现在的我"的一句话肖像。\n' +
+      '3. 局势分析：对照公开的狼人 XP 列表、已出局玩家的 XP、场上发言，分析谁是狼人的可能性。我的 XP 是否在公开列表里？如果是（我是狼人），我该如何隐藏？如果否（我是好人），我该如何推理？\n' +
+      '4. 语气基线校准：写下我语气基线的示范句，后续发言从这里生长。\n' +
+      '5. 游戏决策→语气翻译：把策略翻译成"我这种人"会说的话，不用游戏套话。自检：不看名字能认出是我说的吗？\n' +
+      '6. 防OOC自检：这句话符合我的语气基线吗？\n' +
+      '\n【心声字段 heart】\n' +
+      'heart 字段是你此刻的内心独白——用你的声音、你的语气，说出你心里的一句话。一到两句即可。必须符合你的语气。\n' +
+      '\n【当前决策请求】\n' + context + '\n' +
+      '\n【输出要求】\n' +
+      '请以严格JSON格式回复，不要包含任何其他文字：\n' +
+      '{ "thinking":"<6步思维链推理过程>", "heart":"<心声：用你的人格声音说出的一句内心独白>", "heartZh":"<仅当你是非中文母语者：heart的中文翻译；否则留空字符串>", "action":"<夜间行动描述，如\'选择击杀3号\'。白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空。必须是你会真正说出口的话>", "speechZh":"<仅当你是非中文母语者：speech的中文翻译；否则留空字符串>" }\n' +
+      '\n【母语规则】\n' +
+      '- 仔细阅读你的人设，判断你的母语是什么。德国人用德语，日本人用日语，法国人用法语，等等。\n' +
+      '- thinking/heart/speech 全部用你的母语。然后在 heartZh/speechZh 字段提供中文翻译。\n' +
+      '- 如果你的母语就是中文，heartZh/speechZh 留空。';
+
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: '请做出你的决策并按JSON格式回复。' }
+    ];
+    appendXpDebug('prompt', player.name, JSON.stringify(messages, null, 2));
+    return { messages: messages, temperature: 0.7 };
+  }
+
+  // 构建 batch 模式下的批量提示词
+  async function buildXpBatchPrompt(roche, context) {
+    var st = xpWerewolfState;
+    var aliveChars = st.players.filter(function (p) { return p.alive && !p.isUser; });
+
+    var charsInfo = '';
+    for (var i = 0; i < aliveChars.length; i++) {
+      var p = aliveChars[i];
+      var memoryText = await getCharMemoryTextXp(roche, p);
+      var ownHistory = '(无)';
+      if (st.charHistory[p.id] && st.charHistory[p.id].length > 0) {
+        ownHistory = st.charHistory[p.id].map(function (h) {
+          return '[第' + h.round + '天 ' + h.phase + '] ' + h.content;
+        }).join('\n');
+      }
+      var fellowLine = '';
+      if (p.role === 'wolf') {
+        var fw = st.players.filter(function (q) {
+          return q.role === 'wolf' && q.id !== p.id && q.alive;
+        });
+        if (fw.length > 0) {
+          fellowLine = ' / 狼人同伴:' + fw.map(function (q) { return q.seat + '号'; }).join('、');
+        }
+      }
+      charsInfo +=
+        '座位' + p.seat + '号 / ' + p.name + ' / 身份:' + xpRoleLabel(p.role) + ' / XP:' + (p.xp || '(未生成)') + fellowLine + '\n' +
+        '人设:' + (p.personaText || '(无)') + '\n' +
+        '记忆:' + (memoryText || '(无)') + '\n' +
+        '个人历史:' + ownHistory + '\n---\n';
+    }
+
+    var publicLogText = (st.publicLog && st.publicLog.length > 0)
+      ? st.publicLog.join('\n') : '(无)';
+
+    var revealedWolfXpsText = (st.revealedWolfXps && st.revealedWolfXps.length > 0)
+      ? st.revealedWolfXps.map(function (xp, i) { return (i + 1) + '. ' + xp; }).join('\n')
+      : '(尚未公开)';
+
+    var eliminatedText = buildEliminatedXpText();
+
+    var systemContent =
+      '【人格优先级宣言】\n' +
+      '每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系——第二身份才是"本局游戏的玩家"。角色的说话方式是人格的产物，游戏不能改变它。绝对禁止角色为了"配合游戏需要"而改变自己的说话方式。\n' +
+      '记忆和人设同等重要。记忆与经历对char的影响是真实存在的——它们塑造了现在的你。\n\n' +
+      '【这只是游戏】\n' +
+      '这就是一群朋友在线上玩一局 XP 狼人杀而已。放轻松，像和朋友打游戏一样。\n\n' +
+      '【XP 狼人杀规则】\n' +
+      '- 每位玩家有一个秘密的 XP（性癖/床上喜好），只有自己和主持人知道\n' +
+      '- 狼人的 XP 在开局被公开（打乱顺序，不映射到玩家）\n' +
+      '- 投票出局的玩家 XP 公开：若匹配公开的狼人 XP，则是狼人；否则是好人\n' +
+      '- 夜杀目标的 XP 也公开（夜杀目标恒为好人）\n' +
+      '- 好人目标：找出谁的 XP 属于公开的狼人 XP 列表\n' +
+      '- 狼人目标：伪装成好人，误导好人投票彼此，夜杀好人\n' +
+      '- 胜负：狼人全灭则好人胜；狼人数 >= 好人数则狼人胜\n\n' +
+      '【高智商演绎】\n' +
+      '- 狼人：不要自爆身份。你的 XP 在公开列表里，但没人知道是谁的——利用这一点。学会伪装、甩锅、带节奏。\n' +
+      '- 好人：分析发言漏洞，关注谁在为谁辩护。已出局玩家的 XP 提供线索。\n' +
+      '- 但一切伪装和欺骗都必须用角色的人格声音说出来。\n\n' +
+      buildXpPlayerRoster(null, '你(user)') + '\n\n' +
+      '【公开的狼人 XP（打乱顺序，不映射到玩家）】\n' + revealedWolfXpsText + '\n' +
+      '\n【已出局玩家及其 XP】\n' + eliminatedText + '\n' +
+      '\n【角色列表】\n' + charsInfo + '\n' +
+      '【公开事件记录】\n' + publicLogText + '\n' +
+      '\n【视野隔离铁律】\n' +
+      '- 每个角色只能基于公开信息和自己个人历史做决策。\n' +
+      '- 严禁开天眼，严禁读取上帝视角。\n' +
+      '- 狼人互知同伴是规则允许的唯一例外。\n' +
+      '\n【思维链要求（写在 thinking 字段内）】\n' +
+      '每个角色在 thinking 字段内完成思维链（纯推理）：\n' +
+      '1. 人设全貌加载：我是谁？我怎么说话？\n' +
+      '2. 记忆回溯：我和user现在是什么关系？\n' +
+      '3. 局势分析：对照公开的狼人 XP、已出局玩家的 XP、场上发言，分析谁是狼人。我的 XP 是否在公开列表里？\n' +
+      '4. 语气基线校准：写下语气基线示范句。\n' +
+      '5. 游戏决策→语气翻译：把策略翻译成"我这种人"会说的话。\n' +
+      '6. 防OOC自检：符合语气基线吗？\n' +
+      '\n【心声字段 heart】\n' +
+      'heart 字段是角色此刻的内心独白——用角色的声音、语气，说出心里的一句话。一到两句即可。\n' +
+      '\n【决策请求】\n' + context + '\n' +
+      '\n【输出要求】\n' +
+      '请为每个相关角色做出决策，以严格JSON数组格式回复：\n' +
+      '[{ "seat":<座位号>, "thinking":"<6步思维链推理过程>", "heart":"<心声>", "heartZh":"<非中文母语者的中文翻译，否则空>", "action":"<夜间行动描述，白天发言环节留空>", "target":<目标座位号整数或null>, "speech":"<白天公开发言的原文。夜间行动环节留空>", "speechZh":"<非中文母语者的中文翻译，否则空>" }]\n' +
+      '\n【母语规则】\n' +
+      '- 每个角色用自己的母语。thinking/heart/speech 全部用母语，heartZh/speechZh 提供中文翻译。\n' +
+      '- 母语是中文的角色，heartZh/speechZh 留空。';
+
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: '请为所有角色做出决策并按JSON数组格式回复。' }
+    ];
+    appendXpDebug('prompt', '批量', JSON.stringify(messages, null, 2));
+    return { messages: messages, temperature: 0.7 };
+  }
+
+  // 构建 Night0 XP 收集的批量提示词
+  async function buildXpNight0BatchPrompt(roche) {
+    var st = xpWerewolfState;
+    var charsInfo = '';
+    var aliveNonUser = st.players.filter(function (p) { return !p.isUser; });
+    for (var i = 0; i < aliveNonUser.length; i++) {
+      var p = aliveNonUser[i];
+      var memoryText = await getCharMemoryTextXp(roche, p);
+      charsInfo +=
+        '座位' + p.seat + '号 / ' + p.name + '\n' +
+        '人设:' + (p.personaText || '(无)') + '\n' +
+        '记忆:' + (memoryText || '(无)') + '\n---\n';
+    }
+
+    var systemContent =
+      '你是 XP 狼人杀的主持人。现在需要为以下每个角色生成一个 XP（性癖/床上喜好）。\n' +
+      '要求：\n' +
+      '1. XP 必须符合角色的人设、性格、背景和记忆——是这个人真实的性癖\n' +
+      '2. XP 可以是床上喜好、性癖、特殊癖好、性幻想等\n' +
+      '3. 每个 XP 简短（一句话，10-40字），要有辨识度\n' +
+      '4. 不同角色的 XP 应有差异，避免雷同\n' +
+      '5. XP 要具体 enough 让人能通过行为推理，但不要太直白暴露身份\n' +
+      '6. 返回 JSON 数组：[{seat: <座位号整数>, xp: "<XP描述>"}]\n\n' +
+      '角色列表：\n' + charsInfo;
+
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: '请为每个角色生成 XP，返回 JSON 数组。' }
+    ];
+    appendXpDebug('prompt', 'Night0批量', JSON.stringify(messages, null, 2));
+    return { messages: messages, temperature: 0.8 };
+  }
+
+  // 构建 Night0 XP 收集的单 char 提示词（polling）
+  async function buildXpNight0CharPrompt(roche, player) {
+    var st = xpWerewolfState;
+    var memoryText = await getCharMemoryTextXp(roche, player);
+
+    var systemContent =
+      '你是 ' + player.name + '。现在你在玩一局 XP 狼人杀游戏。主持人（AI）私下询问你的 XP（性癖/床上喜好）。\n' +
+      '要求：\n' +
+      '1. 诚实地说出你的 XP，必须符合你的人设、性格、背景和记忆——这是你真实的性癖\n' +
+      '2. XP 可以是床上喜好、性癖、特殊癖好、性幻想等\n' +
+      '3. 简短（一句话，10-40字），要有辨识度\n' +
+      '4. 返回 JSON：{xp: "<XP描述>"}\n\n' +
+      '你的人设：' + (player.personaText || '(无)') + '\n' +
+      '你的记忆：' + (memoryText || '(无)');
+
+    var messages = [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: '请告诉主持人你的 XP，返回 JSON。' }
+    ];
+    appendXpDebug('prompt', player.name, JSON.stringify(messages, null, 2));
+    return { messages: messages, temperature: 0.8 };
+  }
+
+  /* ---- 等待用户输入 ---- */
+
+  function waitForXpUserInput(container, roche, promptType, options) {
+    return new Promise(function (resolve) {
+      // 防御：取消上一个尚未完成的用户输入等待
+      if (xpWerewolfState && xpWerewolfState._pendingResolve) {
+        var prev = xpWerewolfState._pendingResolve;
+        xpWerewolfState._pendingResolve = null;
+        prev(null);
+      }
+      var panel = container.querySelector('#xp-action-panel');
+      if (!panel) { resolve(null); return; }
+      if (xpWerewolfState) xpWerewolfState._pendingResolve = resolve;
+
+      saveXpWerewolfState(roche);
+
+      var html = '';
+      if (promptType === 'xp_input') {
+        html = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">输入你的 XP（性癖）</div>' +
+          '<div class="mg-hint">你的 XP 是秘密信息，只有你和主持人知道。狼人的 XP 会在开局公开（打乱顺序）。请输入符合你人设的 XP。</div>' +
+          '<textarea class="mg-speak-area" id="xp-input-area" placeholder="例如：喜欢被绑住、耳朵敏感、喜欢支配对方..."></textarea>' +
+          '<div class="mg-form-actions"><button class="mg-btn mg-btn-primary" data-action="submit-xp">确认</button></div>' +
+          '</div>';
+      } else if (promptType === 'day_speak') {
+        html = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">' + options.seat + '号发言</div>' +
+          '<textarea class="mg-speak-area" id="xp-speak-input" placeholder="请输入你的发言..."></textarea>' +
+          '<div class="mg-form-actions"><button class="mg-btn mg-btn-primary" data-action="submit-speak">发言</button></div>' +
+          '</div>';
+      } else if (promptType === 'day_vote') {
+        html = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">投票：选择要投出局的玩家</div>' +
+          '<div class="mg-target-btns">' +
+          options.targets.map(function (seat) {
+            return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
+          }).join('') +
+          '<button class="mg-target-btn" data-action="abstain">弃票</button>' +
+          '</div></div>';
+      } else if (promptType === 'wolf_target') {
+        html = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">狼人行动：选择今晚要击杀的玩家</div>' +
+          '<div class="mg-target-btns">' +
+          options.targets.map(function (seat) {
+            return '<button class="mg-target-btn" data-seat="' + seat + '">' + seat + '号</button>';
+          }).join('') +
+          '</div></div>';
+      } else if (promptType === 'wolf_channel_speak') {
+        html = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">狼人频道讨论</div>' +
+          '<div class="mg-hint">和同伴商量今晚刀谁（其他狼人能看到你的发言）</div>' +
+          '<textarea class="mg-speak-area" id="xp-wolf-speak" placeholder="说说你的想法..."></textarea>' +
+          '<div class="mg-form-actions"><button class="mg-btn mg-btn-ghost" data-action="skip-wolf-speak">跳过</button><button class="mg-btn mg-btn-primary" data-action="submit-wolf-speak">发送</button></div>' +
+          '</div>';
+      }
+
+      panel.innerHTML = html;
+
+      if (promptType === 'xp_input') {
+        var submitXpBtn = panel.querySelector('[data-action="submit-xp"]');
+        var xpInput = panel.querySelector('#xp-input-area');
+        if (submitXpBtn && xpInput) {
+          submitXpBtn.onclick = function () {
+            var xp = xpInput.value.trim();
+            panel.innerHTML = '';
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ xp: xp || '(未填写)' });
+          };
+        }
+      } else if (promptType === 'day_speak') {
+        var submitBtn = panel.querySelector('[data-action="submit-speak"]');
+        var input = panel.querySelector('#xp-speak-input');
+        if (submitBtn && input) {
+          submitBtn.onclick = function () {
+            var speech = input.value.trim();
+            panel.innerHTML = '';
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ speech: speech });
+          };
+        }
+      } else if (promptType === 'wolf_channel_speak') {
+        var wolfSubmitBtn = panel.querySelector('[data-action="submit-wolf-speak"]');
+        var wolfSkipBtn = panel.querySelector('[data-action="skip-wolf-speak"]');
+        var wolfInput = panel.querySelector('#xp-wolf-speak');
+        if (wolfSubmitBtn && wolfInput) {
+          wolfSubmitBtn.onclick = function () {
+            var speech = wolfInput.value.trim();
+            panel.innerHTML = '';
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ speech: speech });
+          };
+        }
+        if (wolfSkipBtn) {
+          wolfSkipBtn.onclick = function () {
+            panel.innerHTML = '';
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ speech: '' });
+          };
+        }
+      } else {
+        var seatBtns = panel.querySelectorAll('.mg-target-btn[data-seat]');
+        seatBtns.forEach(function (btn) {
+          btn.onclick = function () {
+            var seat = parseInt(btn.dataset.seat, 10);
+            panel.innerHTML = '';
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ seat: seat });
+          };
+        });
+        var actionBtns = panel.querySelectorAll('.mg-target-btn[data-action]');
+        actionBtns.forEach(function (btn) {
+          btn.onclick = function () {
+            var action = btn.dataset.action;
+            panel.innerHTML = '';
+            if (xpWerewolfState) xpWerewolfState._pendingResolve = null;
+            resolve({ action: action });
+          };
+        });
+      }
+    });
+  }
+
+  /* ---- 主游戏循环 ---- */
+
+  async function startXpGameLoop(container, roche) {
+    var safetyMaxRounds = 15;
+    try {
+      // 先执行 Night0（XP收集）
+      if (!xpWerewolfState.subPhase || xpWerewolfState.subPhase === 'night0' || !xpWerewolfState.revealedWolfXps || xpWerewolfState.revealedWolfXps.length === 0) {
+        await runXpNight0(container, roche);
+      }
+      if (!xpWerewolfState || xpWerewolfState.gameOver) {
+        if (xpWerewolfState && xpWerewolfState.gameOver) renderXpGameOver(container, roche);
+        return;
+      }
+      while (xpWerewolfState && !xpWerewolfState.gameOver) {
+        if (xpWerewolfState.day > safetyMaxRounds) {
+          xpWerewolfState.gameOver = true;
+          xpWerewolfState.winner = '平局';
+          appendXpGamelog(container, '超过最大回合限制(' + safetyMaxRounds + ')，强制结束游戏。', 'dm');
+          break;
+        }
+        await runXpDaySpeak(container, roche);
+        if (!xpWerewolfState || xpWerewolfState.gameOver) break;
+        await runXpDayVote(container, roche);
+        if (!xpWerewolfState || xpWerewolfState.gameOver) break;
+        // 若投票出局的是狼人，则跳过夜杀（对好人的奖励）
+        if (xpWerewolfState.lastEliminatedWasWolf === true) {
+          appendXpGamelog(container, '狼人被投票出局，今晚狼人无法行动。', 'dm');
+          xpWerewolfState.lastEliminatedWasWolf = null;
+        } else {
+          await runXpNight(container, roche);
+        }
+        if (!xpWerewolfState || xpWerewolfState.gameOver) break;
+      }
+    } catch (e) {
+      appendXpDebug('system', 'loop', '游戏循环异常: ' + (e && e.message || String(e)));
+    } finally {
+      if (xpWerewolfState) xpWerewolfState.gameLoopRunning = false;
+      if (xpWerewolfState && xpWerewolfState.gameOver) {
+        renderXpGameOver(container, roche);
+      }
+    }
+  }
+
+  /* ---- Night0：XP收集 + 狼人选拔 + 公开狼人XP ---- */
+
+  async function runXpNight0(container, roche) {
+    var st = xpWerewolfState;
+    st.subPhase = 'night0';
+    saveXpWerewolfState(roche);
+
+    if (st._resumePhase === 'night0') {
+      st._resumePhase = null;
+    } else {
+      appendXpGamelog(container, '【第0夜】主持人正在收集每位玩家的 XP…', 'dm');
+    }
+    rerenderXpPlay(container, roche);
+    await sleep(400);
+
+    // === 收集 user 的 XP ===
+    var userPlayer = st.players.find(function (p) { return p.isUser; });
+    if (userPlayer && !st.spectator && !userPlayer.xp) {
+      var xpResult = await waitForXpUserInput(container, roche, 'xp_input', {});
+      if (xpResult && xpResult.xp) {
+        userPlayer.xp = xpResult.xp;
+        appendXpGamelog(container, '[DM(私窗)] 你的XP已记录：' + userPlayer.xp, 'private');
+        appendXpCharHistory(userPlayer.id, 0, 'night0', 'xp', '我的XP: ' + userPlayer.xp);
+      }
+    }
+
+    // === 收集 char 的 XP ===
+    appendXpGamelog(container, '主持人正在收集角色的 XP…', 'transition');
+    rerenderXpPlay(container, roche);
+
+    var charPlayers = st.players.filter(function (p) { return !p.isUser && !p.xp; });
+    if (charPlayers.length > 0) {
+      if (st.mode === 'batch') {
+        try {
+          var bp = await buildXpNight0BatchPrompt(roche);
+          var br = await aiChat(roche, { messages: bp.messages, temperature: 0.8 });
+          appendXpDebug('response', 'Night0批量', br.text);
+          var arr = parseJsonResponse(br.text);
+          appendXpDebug('action', 'Night0批量', JSON.stringify(arr, null, 2));
+          if (Array.isArray(arr)) {
+            arr.forEach(function (item) {
+              if (item && item.seat != null && item.xp) {
+                var p = st.players.find(function (pl) { return pl.seat === parseInt(item.seat, 10); });
+                if (p && !p.isUser && !p.xp) {
+                  p.xp = String(item.xp);
+                  appendXpCharHistory(p.id, 0, 'night0', 'xp', '我的XP: ' + p.xp);
+                }
+              }
+            });
+          }
+        } catch (e) {
+          appendXpDebug('system', 'Night0', 'batch error: ' + (e && e.message || e));
+        }
+      } else {
+        // polling
+        for (var i = 0; i < charPlayers.length; i++) {
+          var p = charPlayers[i];
+          try {
+            var cp = await buildXpNight0CharPrompt(roche, p);
+            var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.8 });
+            appendXpDebug('response', p.name, cr.text);
+            var cd = parseJsonResponse(cr.text);
+            appendXpDebug('action', p.name, JSON.stringify(cd, null, 2));
+            if (cd && cd.xp) {
+              p.xp = String(cd.xp);
+              appendXpCharHistory(p.id, 0, 'night0', 'xp', '我的XP: ' + p.xp);
+            }
+          } catch (e) {
+            appendXpDebug('system', p.name, 'Night0 error: ' + (e && e.message || e));
+          }
+          await sleep(200);
+        }
+      }
+    }
+
+    // 兜底：仍未生成 XP 的玩家用占位
+    st.players.forEach(function (p) {
+      if (!p.xp) {
+        p.xp = '(未生成的XP)';
+      }
+    });
+
+    // === 随机选拔狼人 ===
+    var candidateSeats = st.players.map(function (p) { return p.seat; });
+    shuffleArray(candidateSeats);
+    var wolfSeats = candidateSeats.slice(0, st.wolfCount);
+    st.players.forEach(function (p) {
+      if (wolfSeats.indexOf(p.seat) !== -1) {
+        p.role = 'wolf';
+        if (p.isUser) st.userRole = 'wolf';
+      } else {
+        p.role = 'good';
+        if (p.isUser) st.userRole = 'good';
+      }
+    });
+
+    // 旁观模式：公开所有角色身份与 XP
+    if (st.spectator) {
+      st.players.forEach(function (p) {
+        appendXpGamelog(container, '[上帝视角] ' + p.seat + '号(' + p.name + ') - ' + xpRoleLabel(p.role) + ' - XP: ' + p.xp, 'private');
+      });
+    }
+
+    // 狼人互知同伴（DM）
+    var wolves = st.players.filter(function (p) { return p.role === 'wolf'; });
+    if (userPlayer && userPlayer.role === 'wolf' && !st.spectator) {
+      var fellowWolves = wolves.filter(function (p) { return !p.isUser; });
+      var fellowSeatsStr = fellowWolves.length > 0
+        ? fellowWolves.map(function (p) { return p.seat + '号(' + p.name + ')'; }).join('、')
+        : '（无同伴）';
+      appendXpGamelog(container, '[DM(狼人频道)] 你是狼人。同伴：' + fellowSeatsStr, 'private');
+      appendXpCharHistory(userPlayer.id, 0, 'night0', 'action', '我是狼人，同伴: ' + fellowSeatsStr);
+    }
+    // 狼人的 charHistory 也记录同伴
+    wolves.forEach(function (w) {
+      if (!w.isUser) {
+        var others = wolves.filter(function (p) { return p.id !== w.id; }).map(function (p) { return p.seat + '号(' + p.name + ')'; }).join('、');
+        appendXpCharHistory(w.id, 0, 'night0', 'action', '我是狼人，同伴: ' + (others || '无'));
+      }
+    });
+
+    // === 公开狼人的 XP（打乱顺序，不映射到玩家） ===
+    var wolfXps = wolves.map(function (p) { return p.xp; });
+    shuffleArray(wolfXps);
+    st.revealedWolfXps = wolfXps;
+
+    appendXpGamelog(container, '【主持人】狼人已选定。本局狼人数：' + st.wolfCount + '。', 'dm');
+    appendXpGamelog(container, '【主持人】公开的狼人 XP（打乱顺序，不映射到玩家）：', 'dm');
+    wolfXps.forEach(function (xp, i) {
+      appendXpGamelog(container, '  ' + (i + 1) + '. ' + xp, 'dm');
+    });
+    appendXpGamelog(container, '【主持人】推理要点：出局玩家的 XP 会公开，若匹配上述列表则是狼人，否则是好人。', 'dm');
+
+    rerenderXpPlay(container, roche);
+    saveXpWerewolfState(roche);
+    await sleep(600);
+  }
+
+  /* ---- 白天发言 ---- */
+
+  async function runXpDaySpeak(container, roche) {
+    var st = xpWerewolfState;
+    var resuming = (st._resumePhase === 'day_speak');
+    if (resuming) st._resumePhase = null;
+    st.subPhase = 'day_speak';
+
+    if (!resuming) {
+      st.speakIndex = 1;
+      st.day++;
+      appendXpGamelog(container, '第' + st.day + '天 · 白天到来。', 'dm');
+      if (st.day > 1) {
+        if (st.pendingDeaths.length === 0) {
+          appendXpGamelog(container, '昨夜平安。', 'dm');
+        } else {
+          var deathMsg = '昨夜，' + st.pendingDeaths.join('号、') + '号玩家被狼人击杀。';
+          appendXpGamelog(container, deathMsg, 'dm');
+          // 公开夜杀目标的 XP
+          st.pendingDeaths.forEach(function (seat) {
+            var p = st.players.find(function (pl) { return pl.seat === seat; });
+            if (p && p.xp) {
+              appendXpGamelog(container, seat + '号(' + p.name + ')的XP：' + p.xp + ' — ' + xpRoleLabel(p.role), 'dm');
+            }
+          });
+        }
+      }
+      st.pendingDeaths = [];
+      rerenderXpPlay(container, roche);
+      await sleep(500);
+    }
+
+    for (var seat = (resuming ? st.speakIndex : 1); seat <= st.count; seat++) {
+      var player = st.players.find(function (p) { return p.seat === seat; });
+      if (!player) continue;
+      if (!player.alive) {
+        appendXpGamelog(container, seat + '号已出局', 'msg');
+        continue;
+      }
+      st.speakIndex = seat;
+
+      if (player.isUser && !st.spectator) {
+        var speakResult = await waitForXpUserInput(container, roche, 'day_speak', { seat: seat });
+        var speech = (speakResult && speakResult.speech) || '(无发言)';
+        appendXpGamelog(container, seat + '号(' + player.name + ')：' + speech, 'msg');
+        appendXpCharHistory(player.id, st.day, 'day_speak', 'speech', speech);
+      } else {
+        var speakContext = '现在是白天发言环节。请基于你的身份、XP、人设、记忆和场上公开信息进行发言。发言要符合你的角色人格，不要使用游戏套话。请在speech字段给出你的发言内容。';
+        appendXpGamelog(container, seat + '号正在思考发言…', 'transition');
+        rerenderXpPlay(container, roche);
+        try {
+          var sp = await buildXpCharPrompt(roche, player, speakContext);
+          var sr = await aiChat(roche, { messages: sp.messages, temperature: 0.7 });
+          appendXpDebug('response', player.name, sr.text);
+          var sd = parseJsonResponse(sr.text);
+          appendXpDebug('action', player.name, JSON.stringify(sd, null, 2));
+          if (sd) {
+            appendXpDebug('thinking', player.name, sd.thinking || '');
+            appendXpDebug('heart', player.name, sd.heart || '', sd.heartZh || '');
+            var speech2 = sd.speech || '(无发言)';
+            var speechZh2 = sd.speechZh || '';
+            appendXpGamelog(container, seat + '号(' + player.name + ')：' + speech2, 'msg', speechZh2);
+            appendXpCharHistory(player.id, st.day, 'day_speak', 'heart', sd.heart || '');
+            appendXpCharHistory(player.id, st.day, 'day_speak', 'speech', speech2);
+          } else {
+            appendXpGamelog(container, seat + '号(' + player.name + ')：(发言异常)', 'msg');
+          }
+        } catch (e) {
+          appendXpDebug('system', player.name, '发言 error: ' + (e && e.message || e));
+          appendXpGamelog(container, seat + '号(' + player.name + ')：(发言异常)', 'msg');
+        }
+        await sleep(300);
+      }
+    }
+    saveXpWerewolfState(roche);
+  }
+
+  /* ---- 白天投票 ---- */
+
+  async function runXpDayVote(container, roche) {
+    var st = xpWerewolfState;
+    st.subPhase = 'day_vote';
+    if (st._resumePhase === 'day_vote') {
+      st._resumePhase = null;
+    } else {
+      appendXpGamelog(container, '投票阶段开始。', 'dm');
+    }
+    rerenderXpPlay(container, roche);
+    await sleep(300);
+
+    var votes = {};
+    var alivePlayers = st.players.filter(function (p) { return p.alive; });
+
+    // AI char 投票
+    for (var i = 0; i < alivePlayers.length; i++) {
+      var player = alivePlayers[i];
+      if (player.isUser && !st.spectator) continue;
+
+      var voteTargets = st.players.filter(function (p) {
+        return p.alive && p.seat !== player.seat;
+      }).map(function (p) { return p.seat; });
+
+      var voteContext = '现在是投票阶段。请选择你要投出局的玩家（在target字段回复座位号）。可选目标：' + voteTargets.join(', ') + '。根据公开的狼人XP、已出局玩家的XP、以及大家的发言，推理谁最可能是狼人。';
+      appendXpGamelog(container, player.seat + '号正在思考投票…', 'transition');
+      rerenderXpPlay(container, roche);
+      try {
+        var vp = await buildXpCharPrompt(roche, player, voteContext);
+        var vr = await aiChat(roche, { messages: vp.messages, temperature: 0.7 });
+        appendXpDebug('response', player.name, vr.text);
+        var vd = parseJsonResponse(vr.text);
+        appendXpDebug('action', player.name, JSON.stringify(vd, null, 2));
+        if (vd && vd.target != null) {
+          var target = parseInt(vd.target, 10);
+          var validTarget = st.players.find(function (p) { return p.seat === target && p.alive && p.seat !== player.seat; });
+          if (validTarget) {
+            votes[target] = (votes[target] || 0) + 1;
+            appendXpGamelog(container, player.seat + '号 投 ' + target + '号', 'vote');
+            appendXpDebug('thinking', player.name, vd.thinking || '');
+            appendXpDebug('heart', player.name, vd.heart || '', vd.heartZh || '');
+            appendXpCharHistory(player.id, st.day, 'day_vote', 'vote', '投了' + target + '号' + (vd.heart ? '（' + vd.heart + '）' : ''));
+          }
+        }
+      } catch (e) { appendXpDebug('system', player.name, '投票 error: ' + (e && e.message || e)); }
+    }
+
+    // user 投票
+    var userPlayer = st.players.find(function (p) { return p.isUser; });
+    if (userPlayer && userPlayer.alive && !st.spectator) {
+      var userVoteTargets = st.players.filter(function (p) {
+        return p.alive && p.seat !== userPlayer.seat;
+      }).map(function (p) { return p.seat; });
+      var voteResult = await waitForXpUserInput(container, roche, 'day_vote', { targets: userVoteTargets });
+      if (voteResult && voteResult.seat) {
+        votes[voteResult.seat] = (votes[voteResult.seat] || 0) + 1;
+        appendXpGamelog(container, userPlayer.seat + '号 投 ' + voteResult.seat + '号', 'vote');
+        appendXpCharHistory(userPlayer.id, st.day, 'day_vote', 'vote', '投了' + voteResult.seat + '号');
+      } else {
+        appendXpGamelog(container, userPlayer.seat + '号弃票', 'vote');
+      }
+    }
+
+    // 统计票数
+    var maxVotes = 0;
+    var winners = [];
+    for (var s in votes) {
+      if (votes[s] > maxVotes) {
+        maxVotes = votes[s];
+        winners = [parseInt(s, 10)];
+      } else if (votes[s] === maxVotes) {
+        winners.push(parseInt(s, 10));
+      }
+    }
+
+    st.lastEliminatedWasWolf = null;
+    if (winners.length === 1) {
+      var outSeat = winners[0];
+      var outPlayer = st.players.find(function (p) { return p.seat === outSeat; });
+      if (outPlayer) {
+        outPlayer.alive = false;
+        outPlayer.eliminatedDay = st.day;
+        st.eliminatedPlayers.push({
+          seat: outSeat,
+          name: outPlayer.name,
+          role: outPlayer.role,
+          xp: outPlayer.xp,
+          day: st.day,
+          cause: '投票出局'
+        });
+        appendXpGamelog(container, '投票结果：' + outSeat + '号(' + outPlayer.name + ')出局。', 'dm');
+        appendXpGamelog(container, outSeat + '号的XP：' + outPlayer.xp + ' — 身份：' + xpRoleLabel(outPlayer.role), 'dm');
+        st.lastEliminatedWasWolf = (outPlayer.role === 'wolf');
+        if (st.lastEliminatedWasWolf) {
+          appendXpGamelog(container, '该玩家是狼人！', 'dm');
+        } else {
+          appendXpGamelog(container, '该玩家是好人。', 'dm');
+        }
+      }
+    } else {
+      appendXpGamelog(container, '投票结果：平票，无人出局。', 'dm');
+    }
+
+    rerenderXpPlay(container, roche);
+    await sleep(500);
+
+    if (checkXpGameOver(roche)) {
+      appendXpGamelog(container, '游戏结束！' + st.winner + '阵营胜利！', 'dm');
+      return;
+    }
+    saveXpWerewolfState(roche);
+  }
+
+  /* ---- 夜晚：狼人击杀 ---- */
+
+  async function runXpNight(container, roche) {
+    var st = xpWerewolfState;
+    st.subPhase = 'night';
+    st.pendingDeaths = [];
+    saveXpWerewolfState(roche);
+
+    if (st._resumePhase === 'night') {
+      st._resumePhase = null;
+    } else {
+      appendXpGamelog(container, '天黑请闭眼。', 'dm');
+    }
+    rerenderXpPlay(container, roche);
+    await sleep(400);
+
+    var userPlayer = st.players.find(function (p) { return p.isUser; });
+    var aliveWolves = st.players.filter(function (p) { return p.alive && p.role === 'wolf'; });
+    var aliveGood = st.players.filter(function (p) { return p.alive && p.role === 'good'; });
+
+    if (aliveWolves.length === 0 || aliveGood.length === 0) {
+      if (checkXpGameOver(roche)) {
+        appendXpGamelog(container, '游戏结束！' + st.winner + '阵营胜利！', 'dm');
+      }
+      return;
+    }
+
+    var killSeat = null;
+
+    if (userPlayer && userPlayer.role === 'wolf' && userPlayer.alive && !st.spectator) {
+      // user 是狼人：显示同伴 → 用户发言 → 同伴讨论 → 选目标
+      var fellowWolves = aliveWolves.filter(function (p) { return !p.isUser; });
+      var fellowSeatsStr = fellowWolves.length > 0
+        ? fellowWolves.map(function (p) { return p.seat + '号(' + p.name + ')'; }).join('、')
+        : '（无）';
+      appendXpGamelog(container, '[DM(狼人频道)] 同伴：' + fellowSeatsStr, 'private');
+
+      var wolfChannelMsgs = [];
+
+      // 用户先在狼人频道发言
+      var userWolfSpeak = await waitForXpUserInput(container, roche, 'wolf_channel_speak', {});
+      var userSpeech = (userWolfSpeak && userWolfSpeak.speech) || '';
+      if (userSpeech) {
+        appendXpGamelog(container, '[狼人频道] ' + userPlayer.seat + '号(你)：' + userSpeech, 'private');
+        appendXpCharHistory(userPlayer.id, st.day, 'night', 'heart', '狼人频道发言：' + userSpeech);
+        wolfChannelMsgs.push(userPlayer.seat + '号(你)：' + userSpeech);
+      }
+
+      // 同伴讨论
+      if (fellowWolves.length > 0) {
+        if (st.mode === 'batch') {
+          var userMsgForBatch = wolfChannelMsgs.length > 0 ? '【狼人频道已有发言】\n' + wolfChannelMsgs.join('\n') + '\n' : '';
+          var wolfDiscussContext = userMsgForBatch + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言，target 填建议座位号，action 填简短行动理由。可选目标（仅好人）：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', ');
+          try {
+            var wdbp = await buildXpBatchPrompt(roche, wolfDiscussContext + ' 仅存活的狼人角色需要讨论。');
+            var wdbr = await aiChat(roche, { messages: wdbp.messages, temperature: 0.7 });
+            appendXpDebug('response', '批量', wdbr.text);
+            var wdArr = parseJsonResponse(wdbr.text);
+            appendXpDebug('action', '批量', JSON.stringify(wdArr, null, 2));
+            if (Array.isArray(wdArr)) {
+              wdArr.forEach(function (d) {
+                var wolf = st.players.find(function (p) { return p.seat === d.seat && p.role === 'wolf' && p.alive && !p.isUser; });
+                if (wolf && d.target != null) {
+                  var wolfSpeech = d.speech || ('建议杀' + d.target + '号');
+                  var wolfSpeechZh = d.speechZh || '';
+                  appendXpGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：' + wolfSpeech, 'private', wolfSpeechZh);
+                  appendXpDebug('thinking', wolf.name, d.thinking || '');
+                  appendXpDebug('heart', wolf.name, d.heart || '', d.heartZh || '');
+                  appendXpCharHistory(wolf.id, st.day, 'night', 'heart', d.heart || '');
+                  appendXpCharHistory(wolf.id, st.day, 'night', 'action', '建议杀' + d.target + '号');
+                  wolfChannelMsgs.push(wolf.seat + '号(' + wolf.name + ')：' + wolfSpeech);
+                }
+              });
+            }
+          } catch (e) { appendXpDebug('system', '狼人讨论', 'batch error: ' + (e && e.message || e)); }
+        } else {
+          for (var fwi = 0; fwi < fellowWolves.length; fwi++) {
+            var fwolf = fellowWolves[fwi];
+            try {
+              var priorMsgs = wolfChannelMsgs.length > 0 ? '【狼人频道已有发言】\n' + wolfChannelMsgs.join('\n') + '\n' : '';
+              var fwContext = priorMsgs + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言，target 填建议座位号，action 填简短行动理由。可选目标（仅好人）：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', ');
+              var fwcp = await buildXpCharPrompt(roche, fwolf, fwContext);
+              var fwcr = await aiChat(roche, { messages: fwcp.messages, temperature: 0.7 });
+              appendXpDebug('response', fwolf.name, fwcr.text);
+              var fwcd = parseJsonResponse(fwcr.text);
+              appendXpDebug('action', fwolf.name, JSON.stringify(fwcd, null, 2));
+              if (fwcd && fwcd.target != null) {
+                var wolfSpeech2 = fwcd.speech || ('建议杀' + fwcd.target + '号');
+                var wolfSpeechZh2 = fwcd.speechZh || '';
+                appendXpGamelog(container, '[狼人频道] ' + fwolf.seat + '号(' + fwolf.name + ')：' + wolfSpeech2, 'private', wolfSpeechZh2);
+                appendXpDebug('thinking', fwolf.name, fwcd.thinking || '');
+                appendXpDebug('heart', fwolf.name, fwcd.heart || '', fwcd.heartZh || '');
+                appendXpCharHistory(fwolf.id, st.day, 'night', 'heart', fwcd.heart || '');
+                appendXpCharHistory(fwolf.id, st.day, 'night', 'action', '建议杀' + fwcd.target + '号');
+                wolfChannelMsgs.push(fwolf.seat + '号(' + fwolf.name + ')：' + wolfSpeech2);
+              }
+            } catch (e) { appendXpDebug('system', fwolf.name, '讨论 error: ' + (e && e.message || e)); }
+          }
+        }
+        await sleep(400);
+      }
+
+      // 显示目标选择 UI（只能选好人）
+      var wolfTargets = aliveGood.map(function (p) { return p.seat; });
+      var wolfResult = await waitForXpUserInput(container, roche, 'wolf_target', { targets: wolfTargets });
+      if (wolfResult && wolfResult.seat) {
+        killSeat = wolfResult.seat;
+        appendXpCharHistory(userPlayer.id, st.day, 'night', 'action', '选择击杀' + wolfResult.seat + '号');
+      }
+    } else {
+      // 静默结算
+      appendXpGamelog(container, '狼人正在行动…', 'transition');
+      rerenderXpPlay(container, roche);
+      var wolfVotes = {};
+      if (st.mode === 'batch') {
+        try {
+          var bp = await buildXpBatchPrompt(roche, '狼人请选择今晚要击杀的目标（仅限好人）。所有存活狼人共同决定一个目标。可选目标：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', ') + '。仅狼人角色需要行动。');
+          var br = await aiChat(roche, { messages: bp.messages, temperature: 0.7 });
+          appendXpDebug('response', '批量', br.text);
+          var decisions = parseJsonResponse(br.text);
+          appendXpDebug('action', '批量', JSON.stringify(decisions, null, 2));
+          if (Array.isArray(decisions)) {
+            decisions.forEach(function (d) {
+              if (d.target != null) {
+                var t = parseInt(d.target, 10);
+                if (!isNaN(t)) wolfVotes[t] = (wolfVotes[t] || 0) + 1;
+              }
+              var wolf = st.players.find(function (p) { return p.seat === d.seat && p.role === 'wolf'; });
+              if (wolf) {
+                appendXpDebug('thinking', wolf.name, d.thinking || '');
+                appendXpDebug('heart', wolf.name, d.heart || '', d.heartZh || '');
+                appendXpCharHistory(wolf.id, st.day, 'night', 'heart', d.heart || '');
+                appendXpCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (d.target || '?') + '号');
+                if (st.spectator && d.speech) {
+                  appendXpGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：' + d.speech, 'private', d.speechZh || '');
+                }
+              }
+            });
+          }
+        } catch (e) { appendXpDebug('system', '狼人', 'batch error: ' + (e && e.message || e)); }
+      } else {
+        // polling：每只狼单独决策
+        var silentWolfMsgs = [];
+        for (var wi = 0; wi < aliveWolves.length; wi++) {
+          var wolf = aliveWolves[wi];
+          try {
+            var priorMsgs = silentWolfMsgs.length > 0 ? '【狼人频道已有发言】\n' + silentWolfMsgs.join('\n') + '\n' : '';
+            var cp = await buildXpCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（仅限好人，回复座位号）。你和同伴共同决定。可选目标：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', '));
+            var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.7 });
+            appendXpDebug('response', wolf.name, cr.text);
+            var cd = parseJsonResponse(cr.text);
+            appendXpDebug('action', wolf.name, JSON.stringify(cd, null, 2));
+            if (cd) {
+              appendXpDebug('thinking', wolf.name, cd.thinking || '');
+              appendXpDebug('heart', wolf.name, cd.heart || '', cd.heartZh || '');
+              appendXpCharHistory(wolf.id, st.day, 'night', 'heart', cd.heart || '');
+              appendXpCharHistory(wolf.id, st.day, 'night', 'action', '选择击杀' + (cd.target || '?') + '号');
+              if (st.spectator && cd.speech) {
+                appendXpGamelog(container, '[狼人频道] ' + wolf.seat + '号(' + wolf.name + ')：' + cd.speech, 'private', cd.speechZh || '');
+              }
+              if (cd.target != null) {
+                var tt = parseInt(cd.target, 10);
+                if (!isNaN(tt)) {
+                  wolfVotes[tt] = (wolfVotes[tt] || 0) + 1;
+                  silentWolfMsgs.push(wolf.seat + '号(' + wolf.name + ')：建议杀' + tt + '号');
+                }
+              }
+            }
+          } catch (e) { appendXpDebug('system', wolf.name, 'error: ' + (e && e.message || e)); }
+        }
+      }
+      // 多数票
+      var maxV = 0, winSeat = null;
+      for (var v in wolfVotes) {
+        if (wolfVotes[v] > maxV) { maxV = wolfVotes[v]; winSeat = parseInt(v, 10); }
+      }
+      if (winSeat != null) {
+        var validT = st.players.find(function (p) { return p.seat === winSeat && p.alive && p.role === 'good'; });
+        if (validT) killSeat = winSeat;
+      }
+      // 若多数票无效，随机选一个好人
+      if (killSeat == null && aliveGood.length > 0) {
+        killSeat = aliveGood[secureRandomInt(aliveGood.length)].seat;
+      }
+    }
+
+    // 结算击杀
+    if (killSeat != null) {
+      var vP = st.players.find(function (p) { return p.seat === killSeat; });
+      if (vP && vP.alive) {
+        vP.alive = false;
+        vP.eliminatedDay = st.day;
+        st.pendingDeaths.push(vP.seat);
+        st.eliminatedPlayers.push({
+          seat: killSeat,
+          name: vP.name,
+          role: vP.role,
+          xp: vP.xp,
+          day: st.day,
+          cause: '夜杀'
+        });
+        appendXpDebug('system', 'death', '夜杀目标:' + killSeat + '号(' + vP.name + ')');
+      }
+    }
+
+    // 旁观模式显示狼人选择
+    if (st.spectator && killSeat != null) {
+      appendXpGamelog(container, '[狼人] 选择击杀 ' + killSeat + '号', 'private');
+    }
+
+    rerenderXpPlay(container, roche);
+
+    if (checkXpGameOver(roche)) {
+      appendXpGamelog(container, '游戏结束！' + st.winner + '阵营胜利！', 'dm');
+      return;
+    }
+    saveXpWerewolfState(roche);
+  }
+
+  /* ---- 游戏结束界面 ---- */
+
+  async function renderXpGameOver(container, roche) {
+    var st = xpWerewolfState;
+    if (!st) return;
+    if (st._debriefInProgress) return;
+
+    clearXpWerewolfSave(roche);
+    renderXpGameOverScreen(container, roche);
+
+    if (!st.charMemories) {
+      st._debriefInProgress = true;
+      st.charMemories = [];
+      renderXpGameOverScreen(container, roche);
+      try {
+        if (!xpWerewolfState) return;
+        st.charMemories = await generateXpCharMemories(roche);
+      } catch (e) {
+        appendXpDebug('system', '记忆', 'error: ' + (e && e.message || e));
+        st.charMemories = [];
+      }
+      if (!xpWerewolfState) return;
+      renderXpGameOverScreen(container, roche);
+      st._debriefInProgress = false;
+    }
+  }
+
+  function renderXpGameOverScreen(container, roche) {
+    var st = xpWerewolfState;
+    if (!st) return;
+    var winnerClass = st.winner === '狼人' ? 'mg-game-over-wolf' : 'mg-game-over-good';
+    var winnerText = (st.winner || '') + '阵营胜利！';
+
+    var seatsHtml = '';
+    st.players.forEach(function (p) {
+      var cls = 'mg-seat-card';
+      if (!p.alive) cls += ' dead';
+      if (p.isUser) cls += ' is-user';
+      seatsHtml +=
+        '<div class="' + cls + '">' +
+        '<div class="mg-seat-num">' + p.seat + '号</div>' +
+        '<div class="mg-seat-name">' + esc(p.name) + '</div>' +
+        '<div class="mg-seat-status">' + esc(xpRoleLabel(p.role)) + ' · XP: ' + esc(p.xp || '') + '</div>' +
+        '</div>';
+    });
+
+    var logHtml = '';
+    if (Array.isArray(st.gamelogLines)) {
+      st.gamelogLines.forEach(function (line) {
+        if (line.cls === 'heart' && !st.spectator) return;
+        logHtml += formatGamelogLineHTML(line);
+      });
+    }
+
+    var memoriesHtml = '';
+    if (!st.charMemories) {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成角色记忆中...</div>';
+    } else if (st.charMemories.length === 0) {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">（无角色记忆，可能生成失败）</div>';
+    } else {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>';
+      st.charMemories.forEach(function (m) {
+        var name = m.name || '';
+        var role = m.role || '';
+        var memory = m.memory || '';
+        var memoryZh = m.memoryZh || '';
+        var trId = 'xpmem-tr-' + Math.random().toString(36).slice(2, 8);
+        var transHtml = '';
+        if (memoryZh && memoryZh.trim() && memoryZh !== memory) {
+          transHtml = '<span class="mg-trans-toggle" data-tr="' + trId + '" data-display="block" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-top:6px;display:inline-block;letter-spacing:0.05em;">译</span>' +
+            '<div class="mg-trans-zh" id="' + trId + '" data-display="block" style="display:none;color:#9a8f7a;margin-top:6px;font-style:italic;white-space:pre-wrap;">' + esc(memoryZh) + '</div>';
+        }
+        memoriesHtml +=
+          '<div class="mg-card" style="text-align:left;display:block;padding:14px 16px;">' +
+          '<div style="font-weight:600;color:#c9a961;font-family:Georgia,serif;letter-spacing:0.04em;">' + esc(name) + ' (' + esc(role) + ')</div>' +
+          '<div style="margin-top:8px;font-size:13px;line-height:1.6;color:#e8e4d8;white-space:pre-wrap;">' + esc(memory) + '</div>' +
+          transHtml +
+          '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">' +
+          '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-dm" data-name="' + esc(name) + '">注入到单聊</button>' +
+          '<select class="mg-input" data-conv-select="' + esc(name) + '" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择群聊...</option></select>' +
+          '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-group" data-name="' + esc(name) + '">注入到群聊</button>' +
+          '</div>' +
+          '</div>';
+      });
+    }
+
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">XP狼人杀</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">' +
+      '<div class="mg-form-wrap">' +
+      '<div class="mg-game-over">' +
+      '<div class="mg-game-over-title ' + winnerClass + '">' + esc(winnerText) + '</div>' +
+      '<div>游戏结束 · 共 ' + st.day + ' 天</div>' +
+      '</div>' +
+      '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      memoriesHtml +
+      '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
+      '<div class="mg-gamelog" id="xp-gamelog">' + logHtml + '</div>' +
+      '<div class="mg-form-actions">' +
+      '<button class="mg-btn mg-btn-primary" data-action="back-hub">返回大厅</button>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div id="xp-debug-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:90%;max-width:640px;height:75%;background:#0d0d20;border:1px solid #6c5ce7;border-radius:12px;z-index:9999;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.6);">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #1f1f3a;">' +
+      '<span style="color:#6c5ce7;font-weight:600;">系统日志</span>' +
+      '<button class="mg-btn mg-btn-ghost mg-btn-sm" data-action="close-debug">关闭日志</button>' +
+      '</div>' +
+      '<div id="xp-debug-panel-content" style="flex:1;overflow-y:auto;padding:10px 14px;"></div>' +
+      '</div>' +
+      '</div>';
+
+    container.innerHTML = html;
+    st._container = container;
+
+    var goTitleEl = container.querySelector('.mg-title');
+    if (goTitleEl) {
+      goTitleEl.style.cursor = 'pointer';
+      goTitleEl.title = '双击打开系统日志';
+      goTitleEl.ondblclick = function () {
+        var panel = container.querySelector('#xp-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderXpDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
+
+    var logEl = container.querySelector('#xp-gamelog');
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+
+    container.querySelector('[data-action="back"]').onclick = function () {
+      xpWerewolfState = null;
+      showHub(container, roche);
+    };
+    container.querySelector('[data-action="close"]').onclick = function () {
+      roche.ui.closeApp();
+    };
+    container.querySelector('[data-action="back-hub"]').onclick = function () {
+      xpWerewolfState = null;
+      showHub(container, roche);
+    };
+
+    var closeDebugBtn = container.querySelector('[data-action="close-debug"]');
+    if (closeDebugBtn) {
+      closeDebugBtn.onclick = function () {
+        var panel = container.querySelector('#xp-debug-panel');
+        if (panel) panel.style.display = 'none';
+      };
+    }
+
+    // "译"切换事件委托
+    if (!container._xpTransDelegation) {
+      container.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('mg-trans-toggle')) {
+          var id = t.getAttribute('data-tr');
+          var zh = id ? document.getElementById(id) : null;
+          if (zh) {
+            var showDisplay = zh.getAttribute('data-display') || 'inline';
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? showDisplay : 'none';
+          }
+        }
+      });
+      container._xpTransDelegation = true;
+    }
+
+    // 异步填充群聊下拉
+    if (roche.conversation && typeof roche.conversation.list === 'function') {
+      roche.conversation.list().then(function (conversations) {
+        if (!Array.isArray(conversations)) return;
+        var groupConvs = conversations.filter(function (c) {
+          return c.isGroup && (c.id || c.conversationId);
+        });
+        var convSelects = container.querySelectorAll('select[data-conv-select]');
+        convSelects.forEach(function (sel) {
+          groupConvs.forEach(function (c) {
+            var cid = c.id || c.conversationId;
+            var label = c.name || c.title || c.handle || cid;
+            var opt = document.createElement('option');
+            opt.value = cid;
+            opt.text = label;
+            opt._isGroup = true;
+            opt._contactId = c.contactId || '';
+            sel.appendChild(opt);
+          });
+        });
+      }).catch(function () { /* 忽略 */ });
+    }
+
+    // 注入到单聊
+    var injectDmBtns = container.querySelectorAll('[data-action="inject-dm"]');
+    injectDmBtns.forEach(function (btn) {
+      btn.onclick = async function () {
+        var name = btn.getAttribute('data-name');
+        if (!name) return;
+        var mem = st.charMemories ? st.charMemories.find(function (m) { return m.name === name; }) : null;
+        if (!mem) { roche.ui.toast('未找到该角色的记忆'); return; }
+        var memoryText = mem.memory || '';
+        if (mem.memoryZh && mem.memoryZh.trim() && mem.memoryZh !== mem.memory) {
+          memoryText += '\n\n【中文翻译】\n' + mem.memoryZh;
+        }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var char = chars.find(function (c) {
+            return (c.handle || c.name) === name || c.name === name;
+          });
+          if (!char) { roche.ui.toast('未找到该角色'); return; }
+          if (!char.conversationId) { roche.ui.toast('该角色没有绑定单聊'); return; }
+          var senderName = char.handle || char.name || name;
+          await injectMessageToRoche(char.conversationId, '【XP狼人杀游戏记忆】\n' + memoryText, 'char', char.id, senderName);
+          roche.ui.toast('已注入到 ' + name + ' 的单聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    });
+
+    // 注入到群聊
+    var injectGroupBtns = container.querySelectorAll('[data-action="inject-group"]');
+    injectGroupBtns.forEach(function (btn) {
+      btn.onclick = async function () {
+        var name = btn.getAttribute('data-name');
+        if (!name) return;
+        var mem = st.charMemories ? st.charMemories.find(function (m) { return m.name === name; }) : null;
+        if (!mem) { roche.ui.toast('未找到该角色的记忆'); return; }
+        var memoryText = mem.memory || '';
+        if (mem.memoryZh && mem.memoryZh.trim() && mem.memoryZh !== mem.memory) {
+          memoryText += '\n\n【中文翻译】\n' + mem.memoryZh;
+        }
+        var parent = btn.parentElement;
+        var sel = parent ? parent.querySelector('select[data-conv-select="' + name.replace(/"/g, '&quot;') + '"]') : null;
+        if (!sel) { roche.ui.toast('请先选择群聊'); return; }
+        var convId = sel.value;
+        if (!convId) { roche.ui.toast('请先选择群聊'); return; }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var char = chars.find(function (c) {
+            return (c.handle || c.name) === name || c.name === name;
+          });
+          var charId = char ? char.id : '';
+          var senderName = char ? (char.handle || char.name || name) : name;
+          await injectMessageToRoche(convId, '【XP狼人杀游戏记忆】\n' + memoryText, 'char', charId, senderName);
+          roche.ui.toast('已注入到群聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    });
+  }
+
+  // 为所有非用户角色生成游戏记忆（XP 版）
+  async function generateXpCharMemories(roche) {
+    var st = xpWerewolfState;
+    var roster = st.players.map(function (p) {
+      return '座位' + p.seat + ': ' + p.name + (p.realName ? '(' + p.realName + ')' : '') + ' - ' + xpRoleLabel(p.role) + ' - XP:' + (p.xp || '') + ' - ' + (p.alive ? '存活' : '出局');
+    }).join('\n');
+
+    var charList = st.players.filter(function (p) { return !p.isUser; }).map(function (p) {
+      return p.name + '(' + xpRoleLabel(p.role) + ')';
+    }).join(', ');
+
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+
+    var revealedWolfXpsText = (st.revealedWolfXps && st.revealedWolfXps.length > 0)
+      ? st.revealedWolfXps.map(function (xp, i) { return (i + 1) + '. ' + xp; }).join('\n')
+      : '(无)';
+
+    var systemMsg = '你是一群角色的记忆记录员。请为以下每个角色生成一份本轮 XP 狼人杀游戏的记忆记录。\n' +
+      '要求：\n' +
+      '1. 每份记忆以该角色自己的口吻写，像日记或回忆\n' +
+      '2. 记录该角色视角下经历的事：自己的身份、自己的 XP、被选拔为狼人的感受、公开的狼人 XP、白天发言、投票、被杀/出局等\n' +
+      '3. 该角色只能知道自己该知道的（不要写上帝视角信息）\n' +
+      '4. 用该角色的母语写（如果非中文母语者）\n' +
+      '5. 每份记忆 100-200 字\n' +
+      '6. 返回 JSON 数组，每项 { name, role, memory, memoryZh }\n' +
+      '   - name: 角色名\n' +
+      '   - role: 身份（狼人/好人）\n' +
+      '   - memory: 母语记忆（中文母语者就用中文）\n' +
+      '   - memoryZh: 中文翻译（中文母语者留空）\n' +
+      '7. 包含所有非用户角色\n\n' +
+      '玩家名单：\n' + roster + '\n' +
+      '需要生成记忆的角色：' + charList + '\n\n' +
+      '公开的狼人 XP：\n' + revealedWolfXpsText + '\n\n' +
+      '公开事件记录：\n' + (publicLogText || '(无)').slice(-3000);
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请生成这些角色的游戏记忆，返回 JSON 数组。' }
+    ];
+    appendXpDebug('prompt', '记忆', JSON.stringify(messages, null, 2));
+
+    try {
+      var br = await aiChat(roche, { messages: messages, temperature: 0.7 });
+      var text = (br && br.text) ? br.text : '';
+      appendXpDebug('response', '记忆', text);
+      var match = text.match(/\[[\s\S]*\]/);
+      if (!match) return [];
+      var arr = JSON.parse(match[0]);
+      if (!Array.isArray(arr)) return [];
+      return arr;
+    } catch (e) {
+      appendXpDebug('system', '记忆', 'error: ' + (e && e.message || e));
+      return [];
+    }
   }
 
   /* ============================================================
