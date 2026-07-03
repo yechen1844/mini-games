@@ -2739,7 +2739,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var roster = st.players.map(function (p) {
       var roleLabel = isXp ? xpRoleLabel(p.role) : p.role;
       var extra = isXp ? (' XP:' + (p.xp || '')) : '';
-      return '座位' + p.seat + ': ' + p.name + ' - ' + roleLabel + extra + ' - ' + (p.alive ? '存活' : '出局');
+      var displayName = p.name;
+      if (p.realName && p.handle && p.realName !== p.handle) {
+        displayName = p.realName + '/' + p.handle;
+      } else if (p.realName && p.realName !== p.name) {
+        displayName = p.realName + '/' + p.name;
+      }
+      return '座位' + p.seat + ': ' + displayName + ' - ' + roleLabel + extra + ' - ' + (p.alive ? '存活' : '出局');
     }).join('\n');
 
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
@@ -2756,9 +2762,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
     var systemMsg = '请为以下' + gameName + '游戏生成一份全局总结记忆。\n' +
       '要求：\n' +
-      '1. 开头先列出参与者名单，标明每个人的座位号、名字和身份，例如："参与者：A(1号,狼人)、B(2号,好人)、C(3号,预言家)"\n' +
+      '1. 开头先列出参与者名单，标明每个人的座位号、真名和用户名（昵称）和身份，例如："参与者：沈砚/阿砚(1号,狼人)、张三/san(2号,好人)、C(3号,预言家)"。真名和用户名都写上，避免认不出。\n' +
       '2. 用两句话简述游戏规则\n' +
-      '3. 描述游戏经过（每天发生了什么，关键事件，转折点）—— 提到玩家时必须用名字（可带座位号），不要只写座位号\n' +
+      '3. 描述游戏经过（每天发生了什么，关键事件，转折点）—— 提到玩家时必须用名字（真名或用户名均可），不要只写座位号\n' +
       '4. 描述结局（谁赢了，怎么赢的）\n' +
       '5. 全文300字以内，简洁明了，像旁观者的记录\n' +
       '6. 用中文写\n' +
@@ -7263,7 +7269,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.13.3",
+    version: "1.13.4",
     apps: [
       {
         id: "mini-games-hub",
