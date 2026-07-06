@@ -2164,8 +2164,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           '\n请发表你的获胜/失败感言（一两句话即可，用你的人格声音说出）。' +
           (priorSpeeches ? '\n已有感言：\n' + priorSpeeches : '');
         var prompt = isXp ? await buildXpCharPrompt(roche, p, context) : await buildCharPrompt(roche, p, context);
-        var result = await aiChat(roche, { messages: prompt.messages, temperature: 0.8 });
-        var parsed = parseJsonResponse(result.text);
+        var result = isXp ? await aiChatJsonXp(roche, { messages: prompt.messages, temperature: 0.8 }, '获胜感言') : await aiChatJson(roche, { messages: prompt.messages, temperature: 0.8 }, '获胜感言');
+        var parsed = result.parsed;
         if (parsed && parsed.speech) {
           speeches.push({ name: p.name, role: roleLabel, speech: parsed.speech, speechZh: parsed.speechZh || '' });
           logAppend('[获胜感言] ' + p.name + '：' + parsed.speech, 'dm', parsed.speechZh || '');
@@ -2818,6 +2818,38 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return null;
   }
 
+  // AI 调用 + JSON 解析，解析失败自动重试（最多 3 次）
+  async function aiChatJson(roche, opts, label) {
+    var lastText = '';
+    for (var attempt = 0; attempt < 3; attempt++) {
+      var result = await aiChat(roche, opts);
+      lastText = result.text;
+      var parsed = parseJsonResponse(result.text);
+      if (parsed !== null) return { text: result.text, parsed: parsed, ok: true };
+      if (attempt < 2) {
+        appendDebug('system', label || 'aiChatJson', '解析失败，重试 ' + (attempt + 2) + '/3');
+        await sleep(500);
+      }
+    }
+    return { text: lastText, parsed: null, ok: false };
+  }
+
+  // XP 版本的 aiChatJson（写入 XP debug log）
+  async function aiChatJsonXp(roche, opts, label) {
+    var lastText = '';
+    for (var attempt = 0; attempt < 3; attempt++) {
+      var result = await aiChat(roche, opts);
+      lastText = result.text;
+      var parsed = parseJsonResponse(result.text);
+      if (parsed !== null) return { text: result.text, parsed: parsed, ok: true };
+      if (attempt < 2) {
+        appendXpDebug('system', label || 'aiChatJsonXp', '解析失败，重试 ' + (attempt + 2) + '/3');
+        await sleep(500);
+      }
+    }
+    return { text: lastText, parsed: null, ok: false };
+  }
+
   // 角色构成文字
   function getRoleCompositionText(count) {
     switch (count) {
@@ -3202,9 +3234,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         vsBox.innerHTML =
           '<div style="margin-bottom:12px;color:#c9a961;font-size:14px;font-family:Georgia,serif;letter-spacing:0.04em;">游戏结束！' + esc(vsWinner) + '阵营胜利！你的身份是' + esc(vsUserRole) + '。请发表你的感言：</div>' +
           '<textarea id="ww-victory-input" style="width:100%;min-height:90px;background:#0d0d1a;border:1px solid #2a2a40;border-radius:3px;padding:10px;color:#e8e4d8;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;" placeholder="输入你的获胜/失败感言..."></textarea>' +
-          '<div style="margin-top:12px;text-align:right;">' +
-          '<button class="mg-btn mg-btn-sm mg-btn-primary" id="ww-victory-submit">发表</button>' +
-          '<button class="mg-btn mg-btn-sm mg-btn-ghost" id="ww-victory-skip" style="margin-left:6px;">跳过</button>' +
+          '<div style="margin-top:14px;text-align:right;">' +
+          '<button class="mg-btn mg-btn-ghost" id="ww-victory-skip" style="margin-right:6px;">跳过</button>' +
+          '<button class="mg-btn mg-btn-primary" id="ww-victory-submit" style="padding:8px 24px;font-size:14px;">发表感言</button>' +
           '</div>';
         vsOverlay.appendChild(vsBox);
         container.appendChild(vsOverlay);
@@ -3476,9 +3508,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var gbp = await buildBatchPrompt(roche, guardContext + ' 仅守卫角色需要行动。');
-            var gbr = await aiChat(roche, { messages: gbp.messages, temperature: 0.7 });
+            var gbr = await aiChatJson(roche, { messages: gbp.messages, temperature: 0.7 }, '批量');
             appendDebug('response', '批量', gbr.text);
-            var gdArr = parseJsonResponse(gbr.text);
+            var gdArr = gbr.parsed;
             appendDebug('action', '批量', JSON.stringify(gdArr, null, 2));
             if (Array.isArray(gdArr) && gdArr.length > 0) {
               var gd = gdArr.find(function (d) { return d.seat === guard.seat; });
@@ -3499,9 +3531,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         } else {
           try {
             var gcp = await buildCharPrompt(roche, guard, guardContext);
-            var gcr = await aiChat(roche, { messages: gcp.messages, temperature: 0.7 });
+            var gcr = await aiChatJson(roche, { messages: gcp.messages, temperature: 0.7 }, guard.name);
             appendDebug('response', guard.name, gcr.text);
-            var gcd = parseJsonResponse(gcr.text);
+            var gcd = gcr.parsed;
             appendDebug('action', guard.name, JSON.stringify(gcd, null, 2));
             if (gcd) {
               appendDebug('thinking', guard.name, gcd.thinking || '');
@@ -3556,9 +3588,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             var wolfDiscussContext = userMsgForBatch + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言（用你的母语，非中文母语者附 speechZh），target 填建议座位号，action 填简短行动理由。';
             try {
               var wdbp = await buildBatchPrompt(roche, wolfDiscussContext + ' 仅存活的狼人角色需要讨论。');
-              var wdbr = await aiChat(roche, { messages: wdbp.messages, temperature: 0.7 });
+              var wdbr = await aiChatJson(roche, { messages: wdbp.messages, temperature: 0.7 }, '批量');
               appendDebug('response', '批量', wdbr.text);
-              var wdArr = parseJsonResponse(wdbr.text);
+              var wdArr = wdbr.parsed;
               appendDebug('action', '批量', JSON.stringify(wdArr, null, 2));
               if (Array.isArray(wdArr)) {
                 wdArr.forEach(function (d) {
@@ -3583,9 +3615,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
                 var priorMsgs = wolfChannelMsgs.length > 0 ? '【狼人频道已有发言】\n' + wolfChannelMsgs.join('\n') + '\n' : '';
                 var fwContext = priorMsgs + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言（用你的母语，非中文母语者附 speechZh），target 填建议座位号，action 填简短行动理由。';
                 var fwcp = await buildCharPrompt(roche, fwolf, fwContext);
-                var fwcr = await aiChat(roche, { messages: fwcp.messages, temperature: 0.7 });
+                var fwcr = await aiChatJson(roche, { messages: fwcp.messages, temperature: 0.7 }, fwolf.name);
                 appendDebug('response', fwolf.name, fwcr.text);
-                var fwcd = parseJsonResponse(fwcr.text);
+                var fwcd = fwcr.parsed;
                 appendDebug('action', fwolf.name, JSON.stringify(fwcd, null, 2));
                 if (fwcd && fwcd.target != null) {
                   var wolfSpeech = fwcd.speech || ('建议杀' + fwcd.target + '号');
@@ -3618,9 +3650,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var bp = await buildBatchPrompt(roche, '狼人请选择今晚要击杀的目标（可以击杀包括自己在内的任何存活玩家，允许自刀）。所有存活狼人共同决定一个目标。仅狼人角色需要行动。');
-            var br = await aiChat(roche, { messages: bp.messages, temperature: 0.7 });
+            var br = await aiChatJson(roche, { messages: bp.messages, temperature: 0.7 }, '批量');
             appendDebug('response', '批量', br.text);
-            var decisions = parseJsonResponse(br.text);
+            var decisions = br.parsed;
             appendDebug('action', '批量', JSON.stringify(decisions, null, 2));
             if (Array.isArray(decisions)) {
               decisions.forEach(function (d) {
@@ -3649,9 +3681,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
             try {
               var priorMsgs = silentWolfMsgs.length > 0 ? '【狼人频道已有发言】\n' + silentWolfMsgs.join('\n') + '\n' : '';
               var cp = await buildCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（回复座位号，可以击杀包括自己在内的任何存活玩家，允许自刀）。你和同伴共同决定。');
-              var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.7 });
+              var cr = await aiChatJson(roche, { messages: cp.messages, temperature: 0.7 }, wolf.name);
               appendDebug('response', wolf.name, cr.text);
-              var cd = parseJsonResponse(cr.text);
+              var cd = cr.parsed;
               appendDebug('action', wolf.name, JSON.stringify(cd, null, 2));
               if (cd) {
                 appendDebug('thinking', wolf.name, cd.thinking || '');
@@ -3735,9 +3767,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var wbp = await buildBatchPrompt(roche, witchContext + ' 仅女巫角色需要行动。');
-            var wbr = await aiChat(roche, { messages: wbp.messages, temperature: 0.7 });
+            var wbr = await aiChatJson(roche, { messages: wbp.messages, temperature: 0.7 }, '批量');
             appendDebug('response', '批量', wbr.text);
-            var wdArr = parseJsonResponse(wbr.text);
+            var wdArr = wbr.parsed;
             appendDebug('action', '批量', JSON.stringify(wdArr, null, 2));
             if (Array.isArray(wdArr) && wdArr.length > 0) {
               var wd = wdArr.find(function (d) { return d.seat === witch.seat; });
@@ -3767,9 +3799,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         } else {
           try {
             var wcp = await buildCharPrompt(roche, witch, witchContext);
-            var wcr = await aiChat(roche, { messages: wcp.messages, temperature: 0.7 });
+            var wcr = await aiChatJson(roche, { messages: wcp.messages, temperature: 0.7 }, witch.name);
             appendDebug('response', witch.name, wcr.text);
-            var wcd = parseJsonResponse(wcr.text);
+            var wcd = wcr.parsed;
             appendDebug('action', witch.name, JSON.stringify(wcd, null, 2));
             if (wcd) {
               var usedPotionAI2 = false;
@@ -3826,9 +3858,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (st.mode === 'batch') {
           try {
             var sbp = await buildBatchPrompt(roche, seerContext + ' 仅预言家角色需要行动。');
-            var sbr = await aiChat(roche, { messages: sbp.messages, temperature: 0.7 });
+            var sbr = await aiChatJson(roche, { messages: sbp.messages, temperature: 0.7 }, '批量');
             appendDebug('response', '批量', sbr.text);
-            var sdArr = parseJsonResponse(sbr.text);
+            var sdArr = sbr.parsed;
             appendDebug('action', '批量', JSON.stringify(sdArr, null, 2));
             if (Array.isArray(sdArr) && sdArr.length > 0) {
               var sd = sdArr.find(function (d) { return d.seat === seer.seat; });
@@ -3844,9 +3876,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         } else {
           try {
             var scp = await buildCharPrompt(roche, seer, seerContext);
-            var scr = await aiChat(roche, { messages: scp.messages, temperature: 0.7 });
+            var scr = await aiChatJson(roche, { messages: scp.messages, temperature: 0.7 }, seer.name);
             appendDebug('response', seer.name, scr.text);
-            var scd = parseJsonResponse(scr.text);
+            var scd = scr.parsed;
             appendDebug('action', seer.name, JSON.stringify(scd, null, 2));
             if (scd && scd.target != null) {
               seerTargetSeat = parseInt(scd.target, 10);
@@ -3966,9 +3998,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         rerenderPlay(container, roche);
         try {
           var sp = await buildCharPrompt(roche, player, speakContext);
-          var sr = await aiChat(roche, { messages: sp.messages, temperature: 0.7 });
+          var sr = await aiChatJson(roche, { messages: sp.messages, temperature: 0.7 }, player.name);
           appendDebug('response', player.name, sr.text);
-          var sd = parseJsonResponse(sr.text);
+          var sd = sr.parsed;
           appendDebug('action', player.name, JSON.stringify(sd, null, 2));
           if (sd) {
             // 思维链 + 心声仅进 debugLog，不进主 gamelog
@@ -4024,9 +4056,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       rerenderPlay(container, roche);
       try {
         var vp = await buildCharPrompt(roche, player, voteContext);
-        var vr = await aiChat(roche, { messages: vp.messages, temperature: 0.7 });
+        var vr = await aiChatJson(roche, { messages: vp.messages, temperature: 0.7 }, player.name);
         appendDebug('response', player.name, vr.text);
-        var vd = parseJsonResponse(vr.text);
+        var vd = vr.parsed;
         appendDebug('action', player.name, JSON.stringify(vd, null, 2));
         if (vd && vd.target != null) {
           var target = parseInt(vd.target, 10);
@@ -4741,15 +4773,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
 
   // 玩家数 → 狼人数
   function getXpWolfCount(count) {
-    switch (count) {
-      case 4: return 1;
-      case 5: return 1;
-      case 6: return 2;
-      case 7: return 2;
-      case 8: return 3;
-      case 9: return 3;
-      default: return 1;
-    }
+    // XP狼人杀固定1狼人，避免好人被投出后狼人立即获胜
+    return 1;
   }
 
   // 角色构成文字
@@ -5942,9 +5967,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         xvsBox.innerHTML =
           '<div style="margin-bottom:12px;color:#c9a961;font-size:14px;font-family:Georgia,serif;letter-spacing:0.04em;">游戏结束！' + esc(xvsWinner) + '阵营胜利！你的身份是' + esc(xvsUserRole) + '。请发表你的感言：</div>' +
           '<textarea id="xp-victory-input" style="width:100%;min-height:90px;background:#0d0d1a;border:1px solid #2a2a40;border-radius:3px;padding:10px;color:#e8e4d8;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;" placeholder="输入你的获胜/失败感言..."></textarea>' +
-          '<div style="margin-top:12px;text-align:right;">' +
-          '<button class="mg-btn mg-btn-sm mg-btn-primary" id="xp-victory-submit">发表</button>' +
-          '<button class="mg-btn mg-btn-sm mg-btn-ghost" id="xp-victory-skip" style="margin-left:6px;">跳过</button>' +
+          '<div style="margin-top:14px;text-align:right;">' +
+          '<button class="mg-btn mg-btn-ghost" id="xp-victory-skip" style="margin-right:6px;">跳过</button>' +
+          '<button class="mg-btn mg-btn-primary" id="xp-victory-submit" style="padding:8px 24px;font-size:14px;">发表感言</button>' +
           '</div>';
         xvsOverlay.appendChild(xvsBox);
         container.appendChild(xvsOverlay);
@@ -6166,9 +6191,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       if (st.mode === 'batch') {
         try {
           var bp = await buildXpNight0BatchPrompt(roche, userName, userPersona);
-          var br = await aiChat(roche, { messages: bp.messages, temperature: 0.8 });
+          var br = await aiChatJsonXp(roche, { messages: bp.messages, temperature: 0.8 }, 'Night0批量');
           appendXpDebug('response', 'Night0批量', br.text);
-          var arr = parseJsonResponse(br.text);
+          var arr = br.parsed;
           appendXpDebug('action', 'Night0批量', JSON.stringify(arr, null, 2));
           if (Array.isArray(arr)) {
             arr.forEach(function (item) {
@@ -6190,9 +6215,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           var p = charPlayers[i];
           try {
             var cp = await buildXpNight0CharPrompt(roche, p, userName, userPersona);
-            var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.8 });
+            var cr = await aiChatJsonXp(roche, { messages: cp.messages, temperature: 0.8 }, p.name);
             appendXpDebug('response', p.name, cr.text);
-            var cd = parseJsonResponse(cr.text);
+            var cd = cr.parsed;
             appendXpDebug('action', p.name, JSON.stringify(cd, null, 2));
             if (cd && cd.xp) {
               p.xp = String(cd.xp);
@@ -6323,9 +6348,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         rerenderXpPlay(container, roche);
         try {
           var sp = await buildXpCharPrompt(roche, player, speakContext);
-          var sr = await aiChat(roche, { messages: sp.messages, temperature: 0.7 });
+          var sr = await aiChatJsonXp(roche, { messages: sp.messages, temperature: 0.7 }, player.name);
           appendXpDebug('response', player.name, sr.text);
-          var sd = parseJsonResponse(sr.text);
+          var sd = sr.parsed;
           appendXpDebug('action', player.name, JSON.stringify(sd, null, 2));
           if (sd) {
             appendXpDebug('thinking', player.name, sd.thinking || '');
@@ -6380,9 +6405,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       rerenderXpPlay(container, roche);
       try {
         var vp = await buildXpCharPrompt(roche, player, voteContext);
-        var vr = await aiChat(roche, { messages: vp.messages, temperature: 0.7 });
+        var vr = await aiChatJsonXp(roche, { messages: vp.messages, temperature: 0.7 }, player.name);
         appendXpDebug('response', player.name, vr.text);
-        var vd = parseJsonResponse(vr.text);
+        var vd = vr.parsed;
         appendXpDebug('action', player.name, JSON.stringify(vd, null, 2));
         if (vd && vd.target != null) {
           var target = parseInt(vd.target, 10);
@@ -6517,9 +6542,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           var wolfDiscussContext = userMsgForBatch + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言，target 填建议座位号，action 填简短行动理由。可选目标（仅好人）：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', ');
           try {
             var wdbp = await buildXpBatchPrompt(roche, wolfDiscussContext + ' 仅存活的狼人角色需要讨论。');
-            var wdbr = await aiChat(roche, { messages: wdbp.messages, temperature: 0.7 });
+            var wdbr = await aiChatJsonXp(roche, { messages: wdbp.messages, temperature: 0.7 }, '批量');
             appendXpDebug('response', '批量', wdbr.text);
-            var wdArr = parseJsonResponse(wdbr.text);
+            var wdArr = wdbr.parsed;
             appendXpDebug('action', '批量', JSON.stringify(wdArr, null, 2));
             if (Array.isArray(wdArr)) {
               wdArr.forEach(function (d) {
@@ -6544,9 +6569,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
               var priorMsgs = wolfChannelMsgs.length > 0 ? '【狼人频道已有发言】\n' + wolfChannelMsgs.join('\n') + '\n' : '';
               var fwContext = priorMsgs + '狼人频道讨论：作为狼人，你建议今晚刀谁？在 speech 字段给出你在狼人频道的发言，target 填建议座位号，action 填简短行动理由。可选目标（仅好人）：' + aliveGood.map(function (p) { return p.seat + '号'; }).join(', ');
               var fwcp = await buildXpCharPrompt(roche, fwolf, fwContext);
-              var fwcr = await aiChat(roche, { messages: fwcp.messages, temperature: 0.7 });
+              var fwcr = await aiChatJsonXp(roche, { messages: fwcp.messages, temperature: 0.7 }, fwolf.name);
               appendXpDebug('response', fwolf.name, fwcr.text);
-              var fwcd = parseJsonResponse(fwcr.text);
+              var fwcd = fwcr.parsed;
               appendXpDebug('action', fwolf.name, JSON.stringify(fwcd, null, 2));
               if (fwcd && fwcd.target != null) {
                 var wolfSpeech2 = fwcd.speech || ('建议杀' + fwcd.target + '号');
@@ -6579,9 +6604,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       if (st.mode === 'batch') {
         try {
           var bp = await buildXpBatchPrompt(roche, '狼人请选择今晚要击杀的目标（可以击杀包括自己在内的任何存活玩家，允许自刀）。所有存活狼人共同决定一个目标。可选目标：' + st.players.filter(function (p) { return p.alive; }).map(function (p) { return p.seat + '号'; }).join(', ') + '。仅狼人角色需要行动。');
-          var br = await aiChat(roche, { messages: bp.messages, temperature: 0.7 });
+          var br = await aiChatJsonXp(roche, { messages: bp.messages, temperature: 0.7 }, '批量');
           appendXpDebug('response', '批量', br.text);
-          var decisions = parseJsonResponse(br.text);
+          var decisions = br.parsed;
           appendXpDebug('action', '批量', JSON.stringify(decisions, null, 2));
           if (Array.isArray(decisions)) {
             decisions.forEach(function (d) {
@@ -6610,9 +6635,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           try {
             var priorMsgs = silentWolfMsgs.length > 0 ? '【狼人频道已有发言】\n' + silentWolfMsgs.join('\n') + '\n' : '';
             var cp = await buildXpCharPrompt(roche, wolf, priorMsgs + '你是狼人。请选择今晚要击杀的目标（回复座位号，可以击杀包括自己在内的任何存活玩家，允许自刀）。你和同伴共同决定。可选目标：' + st.players.filter(function (p) { return p.alive; }).map(function (p) { return p.seat + '号'; }).join(', '));
-            var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.7 });
+            var cr = await aiChatJsonXp(roche, { messages: cp.messages, temperature: 0.7 }, wolf.name);
             appendXpDebug('response', wolf.name, cr.text);
-            var cd = parseJsonResponse(cr.text);
+            var cd = cr.parsed;
             appendXpDebug('action', wolf.name, JSON.stringify(cd, null, 2));
             if (cd) {
               appendXpDebug('thinking', wolf.name, cd.thinking || '');
@@ -7248,9 +7273,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
           userName + '的信息：' + (userPlayer ? (userPlayer.personaText || userPlayer.bio || '(无)') : '(无)');
 
         var cp = await buildXpCharPrompt(roche, wolf, systemMsg);
-        var cr = await aiChat(roche, { messages: cp.messages, temperature: 0.8 });
+        var cr = await aiChatJsonXp(roche, { messages: cp.messages, temperature: 0.8 }, '奖励场景-' + wolf.name);
         appendXpDebug('response', '奖励场景-' + wolf.name, cr.text);
-        var parsed = parseJsonResponse(cr.text);
+        var parsed = cr.parsed;
         if (parsed) {
           parsed.name = parsed.name || wolf.name;
           scenes.push(parsed);
@@ -7362,7 +7387,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.14.1",
+    version: "1.14.2",
     apps: [
       {
         id: "mini-games-hub",
