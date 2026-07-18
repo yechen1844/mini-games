@@ -7409,11 +7409,16 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
   }
 
-  // 调试日志
+  // 调试日志（仅写入 debugLog，不显示在主 gamelog）
+  // 旁观模式下心声也同步显示在主 gamelog（上帝视角）
   function appendKingDebug(type, label, text) {
-    if (!kingState) return;
-    if (!kingState.debugLog) kingState.debugLog = [];
-    kingState.debugLog.push({ type: type, label: label || '', text: text || '' });
+    var st = kingState;
+    if (!st) return;
+    if (!st.debugLog) st.debugLog = [];
+    st.debugLog.push({ type: type, label: label || '', text: text || '' });
+    if (st.spectator && st._container && type === 'heart' && text) {
+      appendKingGamelog(st._container, '[' + (label || '') + ' 心声] ' + text, 'heart');
+    }
   }
 
   // 向 gamelog 追加一行（独立于狼人杀的 appendGamelog，使用 kingState 与 #kg-gamelog）
@@ -7590,6 +7595,31 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     if (!st.memoryCache) st.memoryCache = {};
     st.memoryCache[player.id] = text;
     return text;
+  }
+
+  // 构建国王游戏参与者名单（号码隔离版本）
+  // selfNumber 对应的人标"你（X号）"，其他人只列名字+真名，不标号码
+  // 这样 char 知道有谁在玩，但不知道号码分配
+  function buildKingPlayerRoster(selfNumber) {
+    var st = kingState;
+    if (!st || !st.players) return '';
+    var lines = [];
+    st.players.forEach(function (p) {
+      var displayName = p.handle || p.name || '?';
+      var realName = p.realName || p.name || '';
+      var line;
+      if (p.number === selfNumber) {
+        line = '你（' + p.number + '号）：' + displayName;
+      } else {
+        line = displayName;
+      }
+      if (realName && realName !== displayName) {
+        line += '（真实姓名：' + realName + '）';
+      }
+      if (p.isUser) line += ' [user]';
+      lines.push(line);
+    });
+    return '【本局参与者名单】\n' + lines.join('\n');
   }
 
   // AI 调用 + JSON 解析（带 API 预设注入，避免修改全局 aiChat）
@@ -7904,7 +7934,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         handle: (userPersona && userPersona.handle) || "",
         isUser: true,
         personaText: userPersonaText,
-        avatar: userAvatar
+        avatar: userAvatar,
+        drinkCount: 0
       });
     }
     charDetails.forEach(function (cd) {
@@ -7915,7 +7946,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         handle: cd.handle || "",
         isUser: false,
         personaText: cd.persona || cd.bio || "",
-        avatar: cd.avatar || ""
+        avatar: cd.avatar || "",
+        drinkCount: 0
       });
     });
 
@@ -8424,7 +8456,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       return userInput;
     }
 
-    // AI 国王下令（号码隔离：不含角色名/人设/记忆）
+    // AI 国王下令（注入国王人设+记忆+名单，输出思维链+心声+命令）
+    var memoryText = await getKingCharMemoryText(roche, kingPlayer);
+    var ownHistory = kingGetCharHistoryText(kingPlayer);
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+    var roster = buildKingPlayerRoster(kingNum);
+
+    // 之前的轮次记录
     var prevRoundsText = '';
     if (st.rounds && st.rounds.length > 0) {
       st.rounds.forEach(function (r) {
@@ -8432,33 +8470,57 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       });
     }
 
-    var systemMsg = '你是一场国王游戏（真心话大冒险）的国王。\n' +
-      '玩家共有 ' + st.count + ' 人，号码为 1-' + st.count + '。\n' +
-      '你是其中一人，你的号码是 ' + kingNum + ' 号。\n' +
-      '你不知道其他号码对应的是谁，请基于号码下达命令。\n\n' +
+    var systemMsg = '你是一场国王游戏（真心话大冒险）的国王。\n\n' +
+      '【人格优先级宣言】\n你的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。\n\n' +
+      '【这只是游戏】\n这就是一群朋友在线上玩一局国王游戏而已。放轻松，像和朋友打游戏一样。\n\n' +
+      '【你的角色信息】\n' +
+      '名字：' + (kingPlayer.handle || kingPlayer.name) + '\n' +
+      '你的号码：' + kingNum + '号\n' +
+      roster + '\n' +
+      '\n【你的人设】\n' + (kingPlayer.personaText || '(无)') + '\n' +
+      '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
+      '\n【游戏公开记录】\n' + publicLogText + '\n' +
+      '\n【你的个人视角记录】\n' + (ownHistory || '(无)') + '\n' +
+      (prevRoundsText ? '\n【之前几轮记录】\n' + prevRoundsText + '\n' : '') +
+      '\n【号码隔离】\n你知道参与者都有谁（见上方名单），但你不知道谁对应几号（除了你自己的号码）。你下达命令时只能说号码，不能说名字。\n\n' +
+      '【思维链要求 thinking】\n' +
+      '在 thinking 字段中完成以下推理：\n' +
+      '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖、对user的初始态度\n' +
+      '2. 记忆回溯：回忆与参与者的关系，经过记忆塑造后的现在的我\n' +
+      '3. 对参与者的看法与认识：对照名单，我认识谁？关系如何？对陌生人和熟人态度不同\n' +
+      '4. 命令策略推理：基于当前气氛和之前几轮，该出什么命令？真心话还是大冒险？选谁？什么内容？要有趣但不伤人\n' +
+      '5. 防OOC自检：我这种人会下这种命令吗？语气对吗？\n' +
+      '注意：thinking 是推理过程，不要把最终命令原文写进去。\n\n' +
+      '【心声字段 heart】\nheart 是你此刻的内心独白——用你的声音、你的语气，说出你心里的一句话。一到两句即可。表达你当上国王的真实感受/对局势的态度。\n\n' +
+      '【当前任务】\n' +
+      '你是本轮国王。玩家共 ' + st.count + ' 人，号码 1-' + st.count + '。你的号码是 ' + kingNum + ' 号。\n' +
       '请下达一个命令：\n' +
       '1. 选择类型：真心话（让目标回答问题）或 大冒险（让目标执行动作）\n' +
       '2. 指定 1-2 个目标号码（不能选你自己的号码 ' + kingNum + '）\n' +
-      '3. 给出具体的命令文本（真心话就给一个有趣的问题，大冒险就给一个具体的动作要求）\n\n' +
+      '3. 给出具体的命令文本（真心话就给一个有趣的问题，大冒险就给一个具体的动作要求）\n' +
       '命令要有趣、有创意，适合朋友之间玩。不要过于恶意或露骨。\n\n' +
-      (prevRoundsText ? '之前几轮的记录（供参考，不要重复）：\n' + prevRoundsText + '\n\n' : '') +
-      '返回 JSON（严格格式，不要包含其他文字）：\n' +
-      '{ "type": "truth" 或 "dare", "targets": [号码数组], "command": "具体命令文本" }';
+      '【输出要求】\n请以严格JSON格式回复，不要包含任何其他文字：\n' +
+      '{ "thinking": "<思维链推理>", "heart": "<心声>", "heartZh": "<仅非中文母语者填中文翻译，否则空字符串>", "type": "truth"或"dare", "targets": [号码数组], "command": "<具体命令文本>", "commandZh": "<仅非中文母语者填中文翻译，否则空字符串>" }';
 
     var messages = [
       { role: 'system', content: systemMsg },
       { role: 'user', content: '请下达命令。' }
     ];
-    appendKingDebug('prompt', '国王下令', JSON.stringify(messages, null, 2));
+    appendKingDebug('prompt', '国王下令-' + kingPlayer.name, JSON.stringify(messages, null, 2));
 
     appendKingGamelog(container, '国王(' + kingNum + '号)正在思考命令…', 'transition');
-    var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.9 }, '国王下令');
+    var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.9 }, '国王下令-' + kingPlayer.name);
     if (!result || !result.ok || !result.parsed) {
-      appendKingDebug('system', '国王下令', 'AI返回异常');
+      appendKingDebug('system', '国王下令-' + kingPlayer.name, 'AI返回异常');
       return null;
     }
     var cmd = result.parsed;
-    appendKingDebug('response', '国王下令', result.text);
+    appendKingDebug('response', '国王下令-' + kingPlayer.name, result.text);
+    if (cmd.thinking) appendKingDebug('thinking', kingPlayer.name, cmd.thinking);
+    if (cmd.heart) {
+      appendKingDebug('heart', kingPlayer.name, cmd.heart);
+      appendKingCharHistory(kingPlayer, st.round, 'heart', cmd.heart);
+    }
     // 校验
     if (!cmd.type || (cmd.type !== 'truth' && cmd.type !== 'dare')) return null;
     if (!Array.isArray(cmd.targets) || cmd.targets.length === 0 || cmd.targets.length > 2) return null;
@@ -8469,7 +8531,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     if (cmd.targets.length === 0) return null;
     if (!cmd.command || typeof cmd.command !== 'string') return null;
 
-    appendKingGamelog(container, '国王(' + kingNum + '号)下令：' + (cmd.type === 'truth' ? '真心话' : '大冒险') + ' → ' + kingNumList(cmd.targets) + '：' + cmd.command, 'action');
+    var cmdZh = cmd.commandZh || '';
+    appendKingGamelog(container, '国王(' + kingNum + '号)下令：' + (cmd.type === 'truth' ? '真心话' : '大冒险') + ' → ' + kingNumList(cmd.targets) + '：' + cmd.command, 'action', cmdZh);
     return cmd;
   }
 
@@ -8539,30 +8602,43 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return responses;
   }
 
-  // 单个 AI 目标响应（polling 模式，视野隔离）
+  // 单个 AI 目标响应（polling 模式，注入人设+记忆+名单，输出思维链+心声+第三人称叙事，支持喝酒逃避）
   async function kingSingleTargetResponse(container, roche, kingNum, command, target) {
     var st = kingState;
     var player = target.player;
     var memoryText = await getKingCharMemoryText(roche, player);
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
     var ownHistory = kingGetCharHistoryText(player);
+    var roster = buildKingPlayerRoster(target.number);
+    var drinkCount = player.drinkCount || 0;
+    var drinksLeft = 3 - drinkCount;
 
     var systemMsg = '【人格优先级宣言】\n' +
       '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。\n\n' +
       '【这只是游戏】\n这就是一群朋友在线上玩一局国王游戏（真心话大冒险）而已。放轻松，像和朋友打游戏一样。\n\n' +
       '【你的角色信息】\n' +
-      '名字：' + player.name + '\n' +
+      '名字：' + (player.handle || player.name) + '\n' +
       '你的号码：' + target.number + '号\n' +
+      roster + '\n' +
       '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
       '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
       '\n【游戏公开记录】\n' + publicLogText + '\n' +
-      '\n【你的个人视角记录】\n' + ownHistory + '\n' +
+      '\n【你的个人视角记录】\n' + (ownHistory || '(无)') + '\n' +
       '\n【当前情境】\n' +
       '你被国王(' + kingNum + '号)点到要做' + (command.type === 'truth' ? '真心话' : '大冒险') + '。\n' +
       '国王的命令：' + command.command + '\n\n' +
-      '【号码隔离】\n你不知道国王是谁，也不知道其他号码对应谁。只知道国王的号码是' + kingNum + '号。\n\n' +
+      '【号码隔离】\n你知道参与者都有谁（见上方名单），但你不知道国王是谁、不知道其他号码对应谁。只知道国王的号码是' + kingNum + '号。\n\n' +
+      '【喝酒逃避】\n你可以选择喝酒来逃避命令。你还可以喝 ' + drinksLeft + ' 次酒（最多3次）。如果你选择喝酒，在 drink 字段设为 true，narrative 字段写你喝酒逃避的反应。但如果 drinksLeft 为 0，你必须执行命令。\n\n' +
+      '【思维链要求 thinking】\n' +
+      '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
+      '2. 记忆回溯：回忆相关经历和关系\n' +
+      '3. 对参与者的看法与认识：对照名单，我认识谁？国王可能是谁？\n' +
+      '4. 应对策略推理：这个命令我该怎么应对？认真回答/执行？还是逃避（喝酒）？还是调侃？要符合我的人格\n' +
+      '5. 防OOC自检：我这种人会这么反应吗？\n\n' +
+      '【心声字段 heart】\nheart 是你此刻的内心独白——用你的声音、你的语气，一两句话。表达你对被点到的真实感受。\n\n' +
+      '【第三人称叙事 narrative】\nnarrative 是类似小说的第三人称文本，描述你的行动/回答/反应。用小说笔法写，像在讲故事。例如："沈砚挑了挑眉，端起酒杯一饮而尽，\'这问题我可不敢答。\'"。100-300字。\n\n' +
       '【输出要求】\n请以严格JSON格式回复，不要包含任何其他文字：\n' +
-      '{ "response": "<你的回应文本，用你的口吻说>", "responseZh": "<仅当你是非中文母语者：response的中文翻译；否则留空字符串>" }';
+      '{ "thinking": "<思维链>", "heart": "<心声>", "heartZh": "<中文翻译或空>", "narrative": "<第三人称小说文本>", "narrativeZh": "<中文翻译或空>", "drink": <true或false> }';
 
     var messages = [
       { role: 'system', content: systemMsg },
@@ -8576,16 +8652,30 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       appendKingDebug('system', '目标回应-' + player.name, 'AI返回异常');
       return null;
     }
-    var resp = result.parsed.response || '';
-    var respZh = result.parsed.responseZh || '';
-    appendKingGamelog(container, kingNumLabel(target.number) + ' 回应：' + resp, 'speech', respZh);
+    var p = result.parsed;
     appendKingDebug('response', '目标回应-' + player.name, result.text);
-    appendKingCharHistory(player, st.round, 'response', '你被国王' + kingNum + '号点到做' + (command.type === 'truth' ? '真心话' : '大冒险') + '：' + command.command + '。你的回应：' + resp);
+    if (p.thinking) appendKingDebug('thinking', player.name, p.thinking);
+    if (p.heart) {
+      appendKingDebug('heart', player.name, p.heart);
+      appendKingCharHistory(player, st.round, 'heart', p.heart);
+    }
 
-    return { number: target.number, player: player, response: resp, responseZh: respZh };
+    var narrative = p.narrative || p.response || '';
+    var narrativeZh = p.narrativeZh || p.responseZh || '';
+    var drank = p.drink === true;
+    if (drank) {
+      player.drinkCount = (player.drinkCount || 0) + 1;
+      appendKingGamelog(container, kingNumLabel(target.number) + ' 选择喝酒逃避！', 'action');
+    }
+    appendKingGamelog(container, kingNumLabel(target.number) + (drank ? '（喝酒）' : '') + '：' + narrative, 'speech', narrativeZh);
+    appendKingCharHistory(player, st.round, 'response',
+      '你被国王' + kingNum + '号点到做' + (command.type === 'truth' ? '真心话' : '大冒险') + '：' + command.command +
+      '。' + (drank ? '你选择喝酒逃避。' : '你的回应：' + narrative));
+
+    return { number: target.number, player: player, response: narrative, responseZh: narrativeZh, drink: drank };
   }
 
-  // 批量 AI 目标响应（batch 模式）
+  // 批量 AI 目标响应（batch 模式，一起注入所有人设和记忆，分别输出思维链+心声+第三人称叙事+喝酒）
   async function kingBatchTargetResponse(container, roche, kingNum, command, aiTargets) {
     var st = kingState;
     var charListText = '';
@@ -8594,19 +8684,25 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var p = t.player;
       var mem = await getKingCharMemoryText(roche, p);
       var ownHistory = kingGetCharHistoryText(p);
+      var dCount = p.drinkCount || 0;
+      var dLeft = 3 - dCount;
       charListText += '\n--- 目标' + (i + 1) + '：' + t.number + '号 ---\n';
-      charListText += '名字：' + p.name + '\n';
+      charListText += '名字：' + (p.handle || p.name) + '\n';
       charListText += '号码：' + t.number + '号\n';
+      charListText += '已喝酒次数：' + dCount + '（还可喝 ' + dLeft + ' 次）\n';
       charListText += '人设：' + (p.personaText || '(无)') + '\n';
       charListText += '记忆：' + (mem || '(无)') + '\n';
       charListText += '个人视角记录：' + (ownHistory || '(无)') + '\n';
     }
 
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+    // 批量模式下名单不标"你"，每个角色从自己的 block 知道自己的号码
+    var roster = buildKingPlayerRoster(-1);
 
-    var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n' +
-      '【人格优先级宣言】每个角色的说话方式是人格的产物，不能为了游戏改变。\n' +
-      '【这只是游戏】朋友之间玩的游戏，放轻松。\n\n' +
+    var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n\n' +
+      '【人格优先级宣言】每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止为了"配合游戏需要"而改变自己的说话方式。\n\n' +
+      '【这只是游戏】这就是一群朋友在线上玩一局国王游戏（真心话大冒险）而已。放轻松，像和朋友打游戏一样。\n\n' +
+      roster + '\n\n' +
       '【游戏公开记录】\n' + publicLogText + '\n\n' +
       '【当前情境】\n' +
       '国王(' + kingNum + '号)下令：' + (command.type === 'truth' ? '真心话' : '大冒险') + '\n' +
@@ -8614,9 +8710,18 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '【需要回应的目标角色】\n' +
       '以下是每个目标角色的人设和记忆，请分别以各自的口吻回应国王的命令。\n' +
       charListText + '\n\n' +
-      '【号码隔离】\n角色不知道国王是谁，只知道国王的号码。也不知道其他号码对应谁。\n\n' +
+      '【号码隔离】\n每个角色都知道参与者都有谁（见上方名单），但不知道国王是谁、不知道其他号码对应谁。只知道国王的号码是' + kingNum + '号，以及自己的号码（见各自 block）。\n\n' +
+      '【喝酒逃避】\n每个角色都可以选择喝酒来逃避命令（最多3次）。如果选择喝酒，drink 字段设为 true，narrative 字段写喝酒逃避的反应。如果该角色已喝够3次（dLeft 为 0），必须执行命令。\n\n' +
+      '【思维链要求 thinking】\n' +
+      '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
+      '2. 记忆回溯：回忆相关经历和关系\n' +
+      '3. 对参与者的看法与认识：对照名单，我认识谁？国王可能是谁？\n' +
+      '4. 应对策略推理：这个命令我该怎么应对？认真回答/执行？还是逃避（喝酒）？还是调侃？要符合我的人格\n' +
+      '5. 防OOC自检：我这种人会这么反应吗？\n\n' +
+      '【心声字段 heart】\nheart 是此刻的内心独白——用角色自己的声音、语气，一两句话。表达被点到的真实感受。\n\n' +
+      '【第三人称叙事 narrative】\nnarrative 是类似小说的第三人称文本，描述该角色的行动/回答/反应。用小说笔法写，像在讲故事。100-300字。\n\n' +
       '【输出要求】\n请以严格JSON数组格式回复，不要包含任何其他文字：\n' +
-      '[ { "number": <号码整数>, "response": "<该角色的回应文本>", "responseZh": "<中文翻译或空字符串>" } ]\n' +
+      '[ { "number": <号码整数>, "thinking": "<思维链>", "heart": "<心声>", "heartZh": "<中文翻译或空>", "narrative": "<第三人称小说文本>", "narrativeZh": "<中文翻译或空>", "drink": <true或false> } ]\n' +
       '包含所有 ' + aiTargets.length + ' 个目标角色。';
 
     var messages = [
@@ -8640,12 +8745,25 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       for (var k = 0; k < arr.length; k++) {
         if (arr[k].number === t.number) { found = arr[k]; break; }
       }
-      if (found && found.response) {
-        var resp = found.response;
-        var respZh = found.responseZh || '';
-        appendKingGamelog(container, kingNumLabel(t.number) + ' 回应：' + resp, 'speech', respZh);
-        appendKingCharHistory(t.player, st.round, 'response', '你被国王' + kingNum + '号点到做' + (command.type === 'truth' ? '真心话' : '大冒险') + '：' + command.command + '。你的回应：' + resp);
-        responses.push({ number: t.number, player: t.player, response: resp, responseZh: respZh });
+      if (!found) return;
+      if (found.thinking) appendKingDebug('thinking', t.player.name, found.thinking);
+      if (found.heart) {
+        appendKingDebug('heart', t.player.name, found.heart);
+        appendKingCharHistory(t.player, st.round, 'heart', found.heart);
+      }
+      var narrative = found.narrative || found.response || '';
+      var narrativeZh = found.narrativeZh || found.responseZh || '';
+      var drank = found.drink === true;
+      if (drank) {
+        t.player.drinkCount = (t.player.drinkCount || 0) + 1;
+        appendKingGamelog(container, kingNumLabel(t.number) + ' 选择喝酒逃避！', 'action');
+      }
+      if (narrative) {
+        appendKingGamelog(container, kingNumLabel(t.number) + (drank ? '（喝酒）' : '') + '：' + narrative, 'speech', narrativeZh);
+        appendKingCharHistory(t.player, st.round, 'response',
+          '你被国王' + kingNum + '号点到做' + (command.type === 'truth' ? '真心话' : '大冒险') + '：' + command.command +
+          '。' + (drank ? '你选择喝酒逃避。' : '你的回应：' + narrative));
+        responses.push({ number: t.number, player: t.player, response: narrative, responseZh: narrativeZh, drink: drank });
       }
     });
     return responses;
@@ -8703,26 +8821,37 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
   }
 
-  // 单个 AI 反应（polling 模式）
+  // 单个 AI 反应（polling 模式，注入人设+记忆+名单，输出思维链+心声+反应）
   async function kingSingleOtherReact(container, roche, kingNum, command, responses, eventText, player) {
     var st = kingState;
     var memoryText = await getKingCharMemoryText(roche, player);
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
     var ownHistory = kingGetCharHistoryText(player);
+    var roster = buildKingPlayerRoster(player.number);
 
-    var systemMsg = '【人格优先级宣言】\n你的第一身份是"一个人"。说话方式是人格的产物，不能为了游戏改变。\n\n' +
-      '【这只是游戏】朋友之间玩国王游戏（真心话大冒险），放轻松。\n\n' +
+    var systemMsg = '【人格优先级宣言】\n' +
+      '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。\n\n' +
+      '【这只是游戏】\n这就是一群朋友在线上玩一局国王游戏（真心话大冒险）而已。放轻松，像和朋友打游戏一样。\n\n' +
       '【你的角色信息】\n' +
-      '名字：' + player.name + '\n' +
+      '名字：' + (player.handle || player.name) + '\n' +
       '你的号码：' + player.number + '号\n' +
+      roster + '\n' +
       '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
       '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
       '\n【游戏公开记录】\n' + publicLogText + '\n' +
-      '\n【你的个人视角记录】\n' + ownHistory + '\n' +
+      '\n【你的个人视角记录】\n' + (ownHistory || '(无)') + '\n' +
       '\n【本轮发生的事】\n' + eventText + '\n\n' +
-      '【号码隔离】\n你不知道国王是谁，也不知道目标是谁，只知道他们的号码。你也不知道其他号码对应谁。\n\n' +
+      '【号码隔离】\n你知道参与者都有谁（见上方名单），但你不知道国王是谁、不知道目标是谁，只知道他们的号码。你也不知道其他号码对应谁。\n\n' +
+      '【思维链要求 thinking】\n' +
+      '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
+      '2. 记忆回溯：回忆相关经历和关系\n' +
+      '3. 对参与者的看法与认识：对照名单，我认识谁？国王和目标可能是谁？\n' +
+      '4. 反应策略推理：看到这事我有什么反应？吐槽？起哄？同情？要符合我的人格\n' +
+      '5. 防OOC自检：我这种人会这么反应吗？\n\n' +
+      '【心声字段 heart】\nheart 是你此刻的内心独白——用你的声音、你的语气，一两句话。表达你看到本轮事件的真实感受。\n\n' +
+      '【反应字段 reaction】\nreaction 是你作为旁观者的反应/吐槽/评论，用你的口吻说。可以是第一人称或第三人称，自然即可。\n\n' +
       '【输出要求】\n请以严格JSON格式回复，不要包含其他文字：\n' +
-      '{ "reaction": "<你作为旁观者的反应/吐槽/评论，用你的口吻说>", "reactionZh": "<中文翻译或空字符串>" }';
+      '{ "thinking": "<思维链>", "heart": "<心声>", "heartZh": "<中文翻译或空>", "reaction": "<反应文本>", "reactionZh": "<中文翻译或空>" }';
 
     var messages = [
       { role: 'system', content: systemMsg },
@@ -8736,14 +8865,20 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       appendKingDebug('system', '反应-' + player.name, 'AI返回异常');
       return;
     }
-    var reaction = result.parsed.reaction || '';
-    var reactionZh = result.parsed.reactionZh || '';
-    appendKingGamelog(container, kingNumLabel(player.number) + ' 反应：' + reaction, 'speech', reactionZh);
+    var p = result.parsed;
     appendKingDebug('response', '反应-' + player.name, result.text);
+    if (p.thinking) appendKingDebug('thinking', player.name, p.thinking);
+    if (p.heart) {
+      appendKingDebug('heart', player.name, p.heart);
+      appendKingCharHistory(player, st.round, 'heart', p.heart);
+    }
+    var reaction = p.reaction || '';
+    var reactionZh = p.reactionZh || '';
+    appendKingGamelog(container, kingNumLabel(player.number) + ' 反应：' + reaction, 'speech', reactionZh);
     appendKingCharHistory(player, st.round, 'react', '本轮事件：' + eventText + '。你的反应：' + reaction);
   }
 
-  // 批量 AI 反应（batch 模式）
+  // 批量 AI 反应（batch 模式，一起注入所有反应者的人设记忆，分别输出思维链+心声+反应）
   async function kingBatchOthersReact(container, roche, kingNum, command, responses, eventText, aiOthers) {
     var st = kingState;
     var charListText = '';
@@ -8752,7 +8887,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       var mem = await getKingCharMemoryText(roche, p);
       var ownHistory = kingGetCharHistoryText(p);
       charListText += '\n--- 角色' + (i + 1) + '：' + p.number + '号 ---\n';
-      charListText += '名字：' + p.name + '\n';
+      charListText += '名字：' + (p.handle || p.name) + '\n';
       charListText += '号码：' + p.number + '号\n';
       charListText += '人设：' + (p.personaText || '(无)') + '\n';
       charListText += '记忆：' + (mem || '(无)') + '\n';
@@ -8760,17 +8895,28 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
 
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+    // 批量模式下名单不标"你"，每个角色从自己的 block 知道自己的号码
+    var roster = buildKingPlayerRoster(-1);
 
-    var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n' +
-      '【人格优先级宣言】每个角色的说话方式是人格的产物。\n' +
-      '【这只是游戏】朋友之间玩的游戏。\n\n' +
+    var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n\n' +
+      '【人格优先级宣言】每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止为了"配合游戏需要"而改变自己的说话方式。\n\n' +
+      '【这只是游戏】这就是一群朋友在线上玩一局国王游戏（真心话大冒险）而已。放轻松，像和朋友打游戏一样。\n\n' +
+      roster + '\n\n' +
       '【游戏公开记录】\n' + publicLogText + '\n\n' +
       '【本轮发生的事】\n' + eventText + '\n\n' +
       '【需要反应的角色】\n以下是每个角色的人设和记忆，请分别以各自的口吻发表对本轮事件的反应/吐槽/评论。\n' +
       charListText + '\n\n' +
-      '【号码隔离】角色不知道其他号码对应谁，只知道号码。\n\n' +
+      '【号码隔离】\n每个角色都知道参与者都有谁（见上方名单），但不知道国王是谁、不知道目标是谁，只知道他们的号码。也不知道其他号码对应谁。\n\n' +
+      '【思维链要求 thinking】\n' +
+      '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
+      '2. 记忆回溯：回忆相关经历和关系\n' +
+      '3. 对参与者的看法与认识：对照名单，我认识谁？国王和目标可能是谁？\n' +
+      '4. 反应策略推理：看到这事我有什么反应？吐槽？起哄？同情？要符合我的人格\n' +
+      '5. 防OOC自检：我这种人会这么反应吗？\n\n' +
+      '【心声字段 heart】\nheart 是此刻的内心独白——用角色自己的声音、语气，一两句话。表达看到本轮事件的真实感受。\n\n' +
+      '【反应字段 reaction】\nreaction 是该角色作为旁观者的反应/吐槽/评论，用其口吻说。可以是第一人称或第三人称，自然即可。\n\n' +
       '【输出要求】\n请以严格JSON数组格式回复，不要包含其他文字：\n' +
-      '[ { "number": <号码整数>, "reaction": "<该角色的反应文本>", "reactionZh": "<中文翻译或空字符串>" } ]\n' +
+      '[ { "number": <号码整数>, "thinking": "<思维链>", "heart": "<心声>", "heartZh": "<中文翻译或空>", "reaction": "<反应文本>", "reactionZh": "<中文翻译或空>" } ]\n' +
       '包含所有 ' + aiOthers.length + ' 个角色。';
 
     var messages = [
@@ -8794,7 +8940,13 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       for (var k = 0; k < arr.length; k++) {
         if (arr[k].number === p.number) { found = arr[k]; break; }
       }
-      if (found && found.reaction) {
+      if (!found) return;
+      if (found.thinking) appendKingDebug('thinking', p.name, found.thinking);
+      if (found.heart) {
+        appendKingDebug('heart', p.name, found.heart);
+        appendKingCharHistory(p, st.round, 'heart', found.heart);
+      }
+      if (found.reaction) {
         var reaction = found.reaction;
         var reactionZh = found.reactionZh || '';
         appendKingGamelog(container, kingNumLabel(p.number) + ' 反应：' + reaction, 'speech', reactionZh);
@@ -9415,7 +9567,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.15.0",
+    version: "1.15.1",
     apps: [
       {
         id: "mini-games-hub",
