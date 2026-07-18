@@ -55,6 +55,13 @@
       description: "性癖推理社交游戏",
       emoji: "",
       isNative: true
+    },
+    {
+      id: "builtin-king-game",
+      name: "国王游戏",
+      description: "真心话大冒险·号码隔离",
+      emoji: "",
+      isNative: true
     }
   ];
 
@@ -906,6 +913,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   var wwLoadedPresets = []; // 狼人杀视图加载的预设列表
   var xpWerewolfState = null; // XP狼人杀游戏状态
   var xpLoadedPresets = []; // XP狼人杀视图加载的预设列表
+  var kingState = null; // 国王游戏状态
 
   /* ============================================================
    * 辅助函数
@@ -1177,6 +1185,8 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
         if (game.isNative) {
           if (game.id === 'builtin-xp-werewolf') {
             showXpWerewolfGame(container, roche);
+          } else if (game.id === 'builtin-king-game') {
+            showKingGame(container, roche);
           } else {
             showWerewolfGame(container, roche);
           }
@@ -7382,12 +7392,2030 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   }
 
   /* ============================================================
+   * 视图：国王游戏（真心话大冒险·号码隔离）
+   * ============================================================ */
+
+  // 入口
+  async function showKingGame(container, roche) {
+    if (!kingState) {
+      kingState = { phase: "setup" };
+    }
+    if (kingState.phase === "play") {
+      renderKingPlay(container, roche);
+    } else if (kingState.phase === "over") {
+      renderKingGameOverScreen(container, roche);
+    } else {
+      await renderKingSetup(container, roche);
+    }
+  }
+
+  // 调试日志
+  function appendKingDebug(type, label, text) {
+    if (!kingState) return;
+    if (!kingState.debugLog) kingState.debugLog = [];
+    kingState.debugLog.push({ type: type, label: label || '', text: text || '' });
+  }
+
+  // 向 gamelog 追加一行（独立于狼人杀的 appendGamelog，使用 kingState 与 #kg-gamelog）
+  function appendKingGamelog(container, text, cls, zhText) {
+    var st = kingState;
+    if (!st) return;
+    if (!st.gamelogLines) st.gamelogLines = [];
+    st.gamelogLines.push({ text: text, cls: cls || 'msg', zhText: zhText || '' });
+    if (cls !== 'heart' && cls !== 'private' && cls !== 'transition') {
+      st.publicLog.push(text);
+    }
+    var logEl = container.querySelector('#kg-gamelog');
+    if (logEl) {
+      var wasNearBottom = (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight) < 80;
+      var div = document.createElement('div');
+      div.className = 'mg-gamelog-line ' + (cls === 'private' ? 'dm' : (cls || 'msg'));
+      if (zhText && zhText.trim() && zhText !== text) {
+        div.innerHTML = formatTranslatable(text, zhText);
+      } else {
+        div.textContent = text;
+      }
+      logEl.appendChild(div);
+      if (wasNearBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+
+  // 存档
+  function saveKingState(roche) {
+    if (!kingState || !roche || !roche.storage) return;
+    try {
+      roche.storage.set('king-save', JSON.stringify(kingState));
+    } catch (e) { /* 忽略存储错误 */ }
+  }
+
+  async function loadKingState(roche) {
+    if (!roche || !roche.storage) return false;
+    try {
+      var s = await roche.storage.get('king-save');
+      if (s) {
+        kingState = JSON.parse(s);
+        kingState._resumePhase = kingState.phase || null;
+        return true;
+      }
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+
+  async function clearKingSave(roche) {
+    if (!roche || !roche.storage) return;
+    try {
+      if (typeof roche.storage.delete === 'function') {
+        await roche.storage.delete('king-save');
+      } else {
+        await roche.storage.set('king-save', null);
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  // Fisher-Yates 洗牌（使用 Math.random，前端真随机）
+  function kingShuffle(arr) {
+    for (var i = arr.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = arr[i];
+      arr[i] = arr[j];
+      arr[j] = tmp;
+    }
+  }
+
+  // 号码标签（旁观模式显示号码+名字，非旁观模式仅显示号码，user 自己的号码标注"你"）
+  function kingNumLabel(number) {
+    var st = kingState;
+    if (!st) return number + '号';
+    if (st.spectator) {
+      var idx = st.numberMap[number];
+      var p = (idx != null) ? st.players[idx] : null;
+      return number + '号(' + (p ? p.name : '?') + ')';
+    }
+    if (st.userNumber === number) {
+      return number + '号(你)';
+    }
+    return number + '号';
+  }
+
+  // 号码数组转文字
+  function kingNumList(nums) {
+    return nums.map(function (n) { return n + '号'; }).join('、');
+  }
+
+  // 追加角色视角历史（用 id+number 作为 key，避免不同号码串台）
+  function appendKingCharHistory(player, round, phase, content) {
+    var st = kingState;
+    if (!st.charHistory) st.charHistory = {};
+    var key = player.id + '_' + player.number;
+    if (!st.charHistory[key]) st.charHistory[key] = [];
+    st.charHistory[key].push({
+      round: round,
+      phase: phase,
+      content: content
+    });
+  }
+
+  // 获取角色视角历史文本
+  function kingGetCharHistoryText(player) {
+    var st = kingState;
+    if (!st.charHistory) return '(无)';
+    var key = player.id + '_' + player.number;
+    var hist = st.charHistory[key];
+    if (!hist || hist.length === 0) return '(无)';
+    return hist.map(function (h) {
+      return '[第' + h.round + '轮 ' + h.phase + '] ' + h.content;
+    }).join('\n');
+  }
+
+  // 记忆加载（参考 loadMemoryForChar）
+  async function loadKingMemoryForChar(roche, charId) {
+    var st = kingState;
+    if (!st.preset || !Array.isArray(st.preset.sessions) || st.preset.sessions.length === 0) {
+      return { core: '', facts: '', shortTerm: '' };
+    }
+    var convMap = st.convMap || {};
+    var applicableConvIds = convMap[charId] || [];
+    if (applicableConvIds.length === 0) {
+      return { core: '', facts: '', shortTerm: '' };
+    }
+    var core = '';
+    var facts = '';
+    var shortTerm = '';
+    for (var i = 0; i < st.preset.sessions.length; i++) {
+      var session = st.preset.sessions[i];
+      if (applicableConvIds.indexOf(session.conversationId) === -1) continue;
+      try {
+        if (session.mountCore || session.factCount > 0) {
+          var lt = await roche.memory.getLongTerm({
+            conversationId: session.conversationId,
+            limit: 50
+          });
+          if (lt) {
+            if (session.mountCore && lt.core && lt.core.summary) {
+              core += lt.core.summary + '\n';
+            }
+            if (session.factCount > 0 && Array.isArray(lt.facts)) {
+              var sliced = lt.facts.slice(0, session.factCount);
+              sliced.forEach(function (item) {
+                facts += (item.summaryText || item.action || '') + '\n';
+              });
+            }
+          }
+        }
+        if (session.shortTermCount > 0) {
+          var stArr = await roche.memory.getShortTerm({
+            conversationId: session.conversationId,
+            limit: session.shortTermCount
+          });
+          if (Array.isArray(stArr)) {
+            stArr.forEach(function (item) {
+              shortTerm += (item.text || '') + '\n';
+            });
+          }
+        }
+      } catch (e) { /* 忽略单个会话的错误 */ }
+    }
+    return { core: core, facts: facts, shortTerm: shortTerm };
+  }
+
+  // 带缓存的记忆文本
+  async function getKingCharMemoryText(roche, player) {
+    var st = kingState;
+    if (player.isUser) return '';
+    if (st.memoryCache && st.memoryCache[player.id]) {
+      return st.memoryCache[player.id];
+    }
+    var mem = await loadKingMemoryForChar(roche, player.id);
+    var text = (mem.core + '\n' + mem.facts + '\n' + mem.shortTerm).trim();
+    if (!st.memoryCache) st.memoryCache = {};
+    st.memoryCache[player.id] = text;
+    return text;
+  }
+
+  // AI 调用 + JSON 解析（带 API 预设注入，避免修改全局 aiChat）
+  async function kingAiChatJson(roche, opts, label) {
+    var st = kingState;
+    if (st && st.apiPresetId) {
+      try {
+        var presets = await getApiPresets(roche);
+        var preset = presets.find(function (p) { return p.id === st.apiPresetId; });
+        if (preset) {
+          opts.provider = preset.baseUrl;
+          opts.endpoint = preset.baseUrl.replace(/\/$/, '') + '/chat/completions';
+          opts.apiKey = preset.apiKey;
+          opts.model = preset.model;
+        }
+      } catch (e) { /* 读取预设失败，走默认 */ }
+    }
+    var result = await aiChatJson(roche, opts, label);
+    return result;
+  }
+
+  // 渲染调试日志面板
+  function renderKingDebugPanelContent(container) {
+    var st = kingState;
+    if (!st) return;
+    var panel = container.querySelector('#kg-debug-panel-content');
+    if (!panel) return;
+    var html = '';
+    if (!Array.isArray(st.debugLog) || st.debugLog.length === 0) {
+      html = '<div style="color:#9a8f7a;font-size:12px;">（暂无日志）</div>';
+    } else {
+      st.debugLog.forEach(function (log) {
+        var color = '#6a6557';
+        if (log.type === 'prompt') color = '#5b7fa8';
+        else if (log.type === 'response') color = '#e8e4d8';
+        else if (log.type === 'system') color = '#e85d5d';
+        else if (log.type === 'thinking') color = '#c9a961';
+        html += '<div style="margin:6px 0;padding:6px 0;border-bottom:1px solid rgba(201,169,97,0.12);">' +
+          '<div style="color:' + color + ';font-size:11px;font-weight:600;letter-spacing:0.03em;">[' + esc(log.type || '') + '] ' + esc(log.label || '') + '</div>' +
+          '<div style="margin:3px 0 0;word-break:break-word;font-family:\'Cascadia Code\',\'Fira Code\',monospace;font-size:11px;color:#9a8f7a;line-height:1.5;">' + debugEscape(log.text || '') + '</div>' +
+          '</div>';
+      });
+    }
+    panel.innerHTML = html;
+    panel.scrollTop = panel.scrollHeight;
+  }
+
+  // 渲染设置界面
+  async function renderKingSetup(container, roche) {
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">国王游戏</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回">返回</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">' +
+      '<div class="mg-form-wrap">' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">预设</label>' +
+      '<select class="mg-input" id="kg-preset"><option value="">加载中...</option></select>' +
+      '<div class="mg-hint">选择预设后会自动填充下方角色；仍可手动调整</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">参与角色 (多选)</label>' +
+      '<div class="mg-check-list" id="kg-chars"><div class="mg-loading">加载中...</div></div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">玩家人数</label>' +
+      '<select class="mg-input" id="kg-count">' +
+      '<option value="3">3人</option>' +
+      '<option value="4">4人</option>' +
+      '<option value="5">5人</option>' +
+      '<option value="6">6人</option>' +
+      '<option value="7">7人</option>' +
+      '<option value="8">8人</option>' +
+      '<option value="9">9人</option>' +
+      '<option value="10">10人</option>' +
+      '</select>' +
+      '<div class="mg-hint" id="kg-count-hint"></div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">AI 演算模式</label>' +
+      '<select class="mg-input" id="kg-mode">' +
+      '<option value="batch">批量模式（一次演算多个 char）</option>' +
+      '<option value="polling">单个轮询模式（每个 char 独立演算，视野隔离）</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label"><input type="checkbox" id="kg-spectator"> 旁观模式</label>' +
+      '<div class="mg-hint">开启后你以第三人称旁观：所有角色由 AI 操控，你不参与</div>' +
+      '</div>' +
+      '<div class="mg-field">' +
+      '<label class="mg-label">API 预设</label>' +
+      '<select class="mg-input" id="kg-api-preset"><option value="">加载中...</option></select>' +
+      '<div class="mg-hint">选择已配置的 API 预设后，所有 AI 调用将走该 API；不选则使用 Roche 默认 AI</div>' +
+      '</div>' +
+      '<div class="mg-form-actions">' +
+      '<button class="mg-btn mg-btn-primary" data-action="start">开始游戏</button>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    container.innerHTML = html;
+
+    container.querySelector('[data-action="back"]').onclick = function () {
+      kingState = null;
+      showHub(container, roche);
+    };
+    container.querySelector('[data-action="close"]').onclick = function () {
+      roche.ui.closeApp();
+    };
+
+    // 检查存档
+    try {
+      var saved = await roche.storage.get('king-save');
+      if (saved) {
+        var contentEl = container.querySelector('.mg-content');
+        var formWrap = container.querySelector('.mg-form-wrap');
+        if (contentEl && formWrap) {
+          var resumeBar = document.createElement('div');
+          resumeBar.className = 'mg-form-actions';
+          resumeBar.style.marginBottom = '18px';
+          resumeBar.style.padding = '14px 16px';
+          resumeBar.style.background = 'linear-gradient(180deg, rgba(58,53,32,0.18) 0%, rgba(122,46,58,0.10) 100%)';
+          resumeBar.style.border = '1px solid rgba(201,169,97,0.35)';
+          resumeBar.style.borderRadius = '3px';
+          resumeBar.innerHTML = '<div style="margin-bottom:10px;color:#c9a961;font-family:Georgia,serif;letter-spacing:0.05em;">检测到上次未结束的游戏</div>' +
+            '<button class="mg-btn mg-btn-primary" data-action="resume">继续上次游戏</button>';
+          contentEl.insertBefore(resumeBar, formWrap);
+          resumeBar.querySelector('[data-action="resume"]').onclick = async function () {
+            var loaded = await loadKingState(roche);
+            if (loaded && kingState) {
+              if (kingState.gameOver) {
+                renderKingGameOverScreen(container, roche);
+              } else if (kingState.phase === 'play') {
+                kingState._interrupted = false;
+                renderKingPlay(container, roche);
+                if (!kingState.gameLoopRunning) {
+                  kingState.gameLoopRunning = true;
+                  kingGameLoop(container, roche);
+                }
+              } else {
+                renderKingPlay(container, roche);
+              }
+            } else {
+              roche.ui.toast('存档无法恢复');
+            }
+          };
+        }
+      }
+    } catch (e) { /* 忽略存档检测错误 */ }
+
+    // 加载预设
+    var presetSel = container.querySelector('#kg-preset');
+    var kgLoadedPresets = [];
+    try {
+      kgLoadedPresets = await getPresets(roche);
+    } catch (e) { kgLoadedPresets = []; }
+    if (!Array.isArray(kgLoadedPresets)) kgLoadedPresets = [];
+    var presetOpts = '<option value="">（不使用预设）</option>';
+    kgLoadedPresets.forEach(function (p) {
+      presetOpts += '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>';
+    });
+    presetSel.innerHTML = presetOpts;
+
+    // 加载 API 预设
+    var apiPresetSel = container.querySelector('#kg-api-preset');
+    var kgLoadedApiPresets = [];
+    try {
+      kgLoadedApiPresets = await getApiPresets(roche);
+    } catch (e) { kgLoadedApiPresets = []; }
+    if (!Array.isArray(kgLoadedApiPresets)) kgLoadedApiPresets = [];
+    var apiOpts = '<option value="">（使用 Roche 默认 AI）</option>';
+    kgLoadedApiPresets.forEach(function (p) {
+      apiOpts += '<option value="' + esc(p.id) + '">' + esc(p.name || '未命名') + ' · ' + esc(p.model || '') + '</option>';
+    });
+    apiPresetSel.innerHTML = apiOpts;
+
+    // 预设变化时自动勾选角色
+    presetSel.onchange = function () {
+      var pid = presetSel.value;
+      if (!pid) return;
+      var preset = kgLoadedPresets.find(function (p) { return p.id === pid; });
+      if (!preset) return;
+      var charIds = Array.isArray(preset.charIds) ? preset.charIds : [];
+      var checks = container.querySelectorAll('#kg-chars input[type="checkbox"]');
+      checks.forEach(function (cb) {
+        cb.checked = (charIds.indexOf(cb.value) !== -1);
+      });
+    };
+
+    // 加载角色列表
+    var charsBox = container.querySelector('#kg-chars');
+    var characters = [];
+    try {
+      characters = await roche.character.list();
+    } catch (e) { characters = []; }
+    if (!Array.isArray(characters)) characters = [];
+    var charsHtml = '';
+    if (characters.length === 0) {
+      charsHtml = '<div class="mg-loading">暂无角色</div>';
+    } else {
+      characters.forEach(function (c) {
+        var cid = esc(c.id || '');
+        var cname = esc(c.handle || c.name || '未命名');
+        charsHtml +=
+          '<div class="mg-check-item">' +
+          '<label><input type="checkbox" value="' + cid + '">' + cname + '</label>' +
+          '</div>';
+      });
+    }
+    charsBox.innerHTML = charsHtml;
+
+    var countSel = container.querySelector('#kg-count');
+    countSel.value = '4';
+    var spectatorCb = container.querySelector('#kg-spectator');
+    var countHintEl = container.querySelector('#kg-count-hint');
+    function updateCountHint() {
+      var count = parseInt(countSel.value, 10);
+      var spectator = spectatorCb.checked;
+      if (spectator) {
+        countHintEl.textContent = '旁观模式：选择 ' + count + ' 个角色（共 ' + count + ' 人，你不参与）';
+      } else {
+        countHintEl.textContent = '非旁观：选择 ' + (count - 1) + ' 个角色（加你共 ' + count + ' 人）';
+      }
+    }
+    countSel.onchange = updateCountHint;
+    spectatorCb.onchange = updateCountHint;
+    updateCountHint();
+
+    // 默认 polling
+    container.querySelector('#kg-mode').value = 'polling';
+
+    // 开始游戏
+    container.querySelector('[data-action="start"]').onclick = async function () {
+      var presetId = presetSel.value;
+      var preset = presetId ? kgLoadedPresets.find(function (p) { return p.id === presetId; }) : null;
+      var checkedIds = [];
+      var checks = charsBox.querySelectorAll('input[type="checkbox"]:checked');
+      checks.forEach(function (cb) { checkedIds.push(cb.value); });
+      var count = parseInt(countSel.value, 10);
+      var mode = container.querySelector('#kg-mode').value;
+      var spectator = spectatorCb.checked;
+      var apiPresetId = apiPresetSel.value;
+
+      if (spectator) {
+        if (checkedIds.length !== count) {
+          roche.ui.toast("旁观模式需要选择 " + count + " 个角色（共 " + count + " 人，你不参与）");
+          return;
+        }
+      } else {
+        if (checkedIds.length !== count - 1) {
+          roche.ui.toast("需要选择 " + (count - 1) + " 个角色（加你共 " + count + " 人）");
+          return;
+        }
+      }
+
+      await startKingGame(container, roche, {
+        preset: preset,
+        checkedIds: checkedIds,
+        count: count,
+        mode: mode,
+        spectator: spectator,
+        apiPresetId: apiPresetId
+      });
+    };
+  }
+
+  // 开始游戏：分配号码、构建 convMap、存档、启动循环
+  async function startKingGame(container, roche, opts) {
+    var preset = opts.preset;
+    var checkedIds = opts.checkedIds;
+    var count = opts.count;
+    var mode = opts.mode;
+    var spectator = opts.spectator;
+    var apiPresetId = opts.apiPresetId;
+
+    // 开新局前清除旧存档
+    await clearKingSave(roche);
+
+    // 获取用户人设
+    var userPersona = null;
+    try {
+      userPersona = await roche.persona.getActiveUserPersona();
+    } catch (e) { userPersona = null; }
+    var userPersonaText = (userPersona && (userPersona.persona || userPersona.bio)) || "";
+    var userName = (userPersona && (userPersona.handle || userPersona.name)) || "你";
+    var userAvatar = (userPersona && userPersona.avatar) || "";
+
+    // 获取角色详情
+    var charDetails = [];
+    for (var i = 0; i < checkedIds.length; i++) {
+      try {
+        var cd = await roche.character.get(checkedIds[i]);
+        charDetails.push(cd);
+      } catch (e) {
+        charDetails.push({ id: checkedIds[i], name: '角色' + checkedIds[i] });
+      }
+    }
+
+    // 构建玩家列表
+    var allPlayers = [];
+    if (!spectator) {
+      allPlayers.push({
+        id: "user",
+        name: userName,
+        realName: (userPersona && userPersona.name) || "",
+        handle: (userPersona && userPersona.handle) || "",
+        isUser: true,
+        personaText: userPersonaText,
+        avatar: userAvatar
+      });
+    }
+    charDetails.forEach(function (cd) {
+      allPlayers.push({
+        id: cd.id,
+        name: cd.handle || cd.name || ('角色' + cd.id),
+        realName: cd.name || "",
+        handle: cd.handle || "",
+        isUser: false,
+        personaText: cd.persona || cd.bio || "",
+        avatar: cd.avatar || ""
+      });
+    });
+
+    // 前端随机分配号码（Fisher-Yates 洗牌，Math.random）
+    var numbers = [];
+    for (var n = 1; n <= count; n++) numbers.push(n);
+    kingShuffle(numbers);
+
+    var numberMap = {};
+    var userNumber = null;
+    for (var p = 0; p < allPlayers.length; p++) {
+      var num = numbers[p];
+      allPlayers[p].number = num;
+      numberMap[num] = p;
+      if (allPlayers[p].isUser) {
+        userNumber = num;
+      }
+    }
+
+    // 构建 convMap（复制狼人杀逻辑）
+    var convMap = {};
+    try {
+      var conversations = await roche.conversation.list();
+      if (Array.isArray(conversations)) {
+        conversations.forEach(function (conv) {
+          var convId = conv.id || conv.conversationId;
+          if (!convId) return;
+          if (conv.isGroup) {
+            var memberIds = conv.members || [];
+            if (Array.isArray(memberIds) && memberIds.length > 0) {
+              allPlayers.forEach(function (p) {
+                if (!p.isUser && memberIds.indexOf(p.id) !== -1) {
+                  if (!convMap[p.id]) convMap[p.id] = [];
+                  convMap[p.id].push(convId);
+                }
+              });
+            } else if (conv.memberProfiles && Array.isArray(conv.memberProfiles)) {
+              var profileIds = conv.memberProfiles.map(function (m) { return m.id; });
+              allPlayers.forEach(function (p) {
+                if (!p.isUser && profileIds.indexOf(p.id) !== -1) {
+                  if (!convMap[p.id]) convMap[p.id] = [];
+                  convMap[p.id].push(convId);
+                }
+              });
+            }
+          } else if (conv.contactId) {
+            if (!convMap[conv.contactId]) convMap[conv.contactId] = [];
+            convMap[conv.contactId].push(convId);
+          }
+        });
+      }
+    } catch (e) { convMap = {}; }
+
+    // 初始化牌堆
+    var deck = [];
+    for (var d = 1; d <= count; d++) deck.push(d);
+    kingShuffle(deck);
+
+    kingState = {
+      phase: "play",
+      mode: mode,
+      spectator: spectator,
+      preset: preset || null,
+      count: count,
+      players: allPlayers,
+      userNumber: userNumber,
+      numberMap: numberMap,
+      round: 0,
+      currentKing: null,
+      deck: deck,
+      publicLog: [],
+      gamelogLines: [],
+      charHistory: {},
+      convMap: convMap,
+      memoryCache: {},
+      debugLog: [],
+      apiPresetId: apiPresetId || '',
+      gameOver: false,
+      gameLoopRunning: false,
+      rounds: [],
+      gameSummary: null,
+      charMemories: null,
+      _container: null,
+      _resumePhase: null
+    };
+
+    saveKingState(roche);
+    renderKingPlay(container, roche);
+
+    // 启动游戏循环
+    kingState.gameLoopRunning = true;
+    kingGameLoop(container, roche);
+  }
+
+  // 渲染对局界面
+  function renderKingPlay(container, roche) {
+    var st = kingState;
+    if (!st) return;
+
+    if (st.gameOver) {
+      renderKingGameOver(container, roche);
+      return;
+    }
+
+    var seatsHtml = '';
+    st.players.forEach(function (p) {
+      var cls = 'mg-seat-card';
+      if (p.isUser) cls += ' is-user';
+      var numDisplay = (p.isUser || st.spectator) ? (p.number + '号') : '?号';
+      var nameDisplay = st.spectator ? esc(p.name) : (p.isUser ? '你' : '玩家');
+      var status = '';
+      if (st.currentKing === p.number) status = '国王';
+      seatsHtml +=
+        '<div class="' + cls + '">' +
+        '<div class="mg-seat-num">' + numDisplay + '</div>' +
+        '<div class="mg-seat-name">' + nameDisplay + '</div>' +
+        '<div class="mg-seat-status">' + esc(status) + '</div>' +
+        '</div>';
+    });
+
+    var logHtml = '';
+    if (Array.isArray(st.gamelogLines)) {
+      st.gamelogLines.forEach(function (line) {
+        logHtml += formatGamelogLineHTML(line);
+      });
+    }
+
+    var phaseLabel = '当前：第 ' + st.round + ' 轮';
+    if (st.currentKing) {
+      phaseLabel += ' · 国王是 ' + kingNumLabel(st.currentKing);
+    }
+
+    var buttonHtml = '';
+    if (st.gameLoopRunning) {
+      buttonHtml = '<div class="mg-hint">游戏进行中…</div>';
+    } else if (!st.gameOver) {
+      buttonHtml = '<button class="mg-btn mg-btn-primary" data-action="start-loop">开始第一轮</button>';
+    }
+
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">国王游戏 · 第 ' + st.round + ' 轮</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">' +
+      '<div class="mg-form-wrap">' +
+      '<div class="mg-role-card">' +
+      (st.spectator
+        ? '<div class="mg-role-name">旁观模式 — 上帝视角</div><div class="mg-role-skill">你以第三人称旁观全场，所有角色由 AI 操控</div>'
+        : '<div>你的号码：<b>' + (st.userNumber || '?') + '号</b></div>' +
+          '<div class="mg-role-skill">国王点号不点名，被点到就执行真心话或大冒险</div>'
+      ) +
+      '</div>' +
+      '<div class="mg-phase-label" id="kg-phase-label">' + esc(phaseLabel) + '</div>' +
+      '<div class="mg-seats-grid" id="kg-seats-grid">' + seatsHtml + '</div>' +
+      '<div class="mg-gamelog" id="kg-gamelog">' + logHtml + '</div>' +
+      '<div id="kg-action-panel"></div>' +
+      '<div class="mg-form-actions">' + buttonHtml + '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div id="kg-debug-panel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(5,7,15,0.72);z-index:9999;align-items:center;justify-content:center;">' +
+      '<div style="display:flex;flex-direction:column;width:90%;max-width:640px;height:75%;background:linear-gradient(160deg,#11172a,#0a0e1a);border:1px solid rgba(201,169,97,0.4);border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.7);overflow:hidden;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(201,169,97,0.2);">' +
+      '<span style="color:#c9a961;font-weight:600;font-family:Georgia,serif;letter-spacing:0.05em;">系统日志</span>' +
+      '<button class="mg-btn mg-btn-ghost mg-btn-sm" data-action="close-debug">关闭日志</button>' +
+      '</div>' +
+      '<div id="kg-debug-panel-content" style="flex:1;overflow-y:auto;padding:12px 16px;"></div>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+
+    container.innerHTML = html;
+    st._container = container;
+
+    // 双击标题打开系统日志
+    var titleEl = container.querySelector('.mg-title');
+    if (titleEl) {
+      titleEl.style.cursor = 'pointer';
+      titleEl.title = '双击打开系统日志';
+      titleEl.ondblclick = function () {
+        var panel = container.querySelector('#kg-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderKingDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
+
+    var logEl = container.querySelector('#kg-gamelog');
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+
+    container.querySelector('[data-action="back"]').onclick = async function () {
+      var ok = await roche.ui.confirm({
+        title: '退出游戏',
+        message: '确定退出本局？'
+      });
+      if (!ok) return;
+      kingState = null;
+      showHub(container, roche);
+    };
+    container.querySelector('[data-action="close"]').onclick = function () {
+      roche.ui.closeApp();
+    };
+
+    var closeDebugBtn = container.querySelector('[data-action="close-debug"]');
+    if (closeDebugBtn) {
+      closeDebugBtn.onclick = function () {
+        var panel = container.querySelector('#kg-debug-panel');
+        if (panel) panel.style.display = 'none';
+      };
+    }
+
+    // 译切换事件委托（容器级，只挂一次）
+    if (!container._wwTransDelegation) {
+      container.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('mg-trans-toggle')) {
+          var id = t.getAttribute('data-tr');
+          var zh = id ? document.getElementById(id) : null;
+          if (zh) {
+            var showDisplay = zh.getAttribute('data-display') || 'inline';
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? showDisplay : 'none';
+          }
+        }
+      });
+      container._wwTransDelegation = true;
+    }
+
+    // 开始循环按钮
+    var startBtn = container.querySelector('[data-action="start-loop"]');
+    if (startBtn) {
+      startBtn.onclick = function () {
+        st.gameLoopRunning = true;
+        kingGameLoop(container, roche);
+      };
+    }
+  }
+
+  // 重新渲染对局（增量更新座位网格与阶段标签，不重建 gamelog）
+  function rerenderKingPlay(container, roche) {
+    var st = kingState;
+    if (!st) return;
+    var seatsGridEl = container.querySelector('#kg-seats-grid');
+    if (seatsGridEl) {
+      var seatsHtml = '';
+      st.players.forEach(function (p) {
+        var cls = 'mg-seat-card';
+        if (p.isUser) cls += ' is-user';
+        var numDisplay = (p.isUser || st.spectator) ? (p.number + '号') : '?号';
+        var nameDisplay = st.spectator ? esc(p.name) : (p.isUser ? '你' : '玩家');
+        var status = '';
+        if (st.currentKing === p.number) status = '国王';
+        seatsHtml +=
+          '<div class="' + cls + '">' +
+          '<div class="mg-seat-num">' + numDisplay + '</div>' +
+          '<div class="mg-seat-name">' + nameDisplay + '</div>' +
+          '<div class="mg-seat-status">' + esc(status) + '</div>' +
+          '</div>';
+      });
+      seatsGridEl.innerHTML = seatsHtml;
+    }
+    var phaseLabelEl = container.querySelector('#kg-phase-label');
+    if (phaseLabelEl) {
+      var phaseLabel = '当前：第 ' + st.round + ' 轮';
+      if (st.currentKing) {
+        phaseLabel += ' · 国王是 ' + kingNumLabel(st.currentKing);
+      }
+      phaseLabelEl.textContent = phaseLabel;
+    }
+  }
+
+  // 等待用户输入（国王下令/目标响应/旁观者反应/是否继续）
+  function waitForKingUserInput(container, roche, promptType, options) {
+    return new Promise(function (resolve) {
+      // 防御：取消上一个尚未完成的输入等待
+      if (kingState && kingState._pendingResolve) {
+        var prev = kingState._pendingResolve;
+        kingState._pendingResolve = null;
+        prev(null);
+      }
+      kingState._pendingResolve = resolve;
+
+      var panel = container.querySelector('#kg-action-panel');
+      if (!panel) { resolve(null); return; }
+
+      // 等待输入前保存存档
+      saveKingState(roche);
+
+      if (promptType === 'king_command') {
+        var ownNumber = options.ownNumber;
+        var count = options.count;
+        var numberBtns = '';
+        for (var nn = 1; nn <= count; nn++) {
+          if (nn === ownNumber) continue;
+          numberBtns += '<button class="mg-target-btn" data-num="' + nn + '">' + nn + '号</button>';
+        }
+        panel.innerHTML = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">你是本轮国王！请下令</div>' +
+          '<div>你的号码：<b>' + ownNumber + '号</b></div>' +
+          '<div style="margin-top:8px;">' +
+            '<label style="margin-right:14px;"><input type="radio" name="kg-cmd-type" value="truth" checked> 真心话</label>' +
+            '<label><input type="radio" name="kg-cmd-type" value="dare"> 大冒险</label>' +
+          '</div>' +
+          '<div style="margin-top:8px;">选择目标号码（1-2个）：</div>' +
+          '<div class="mg-target-btns" id="kg-target-btns">' + numberBtns + '</div>' +
+          '<div style="margin-top:8px;">具体命令/问题：</div>' +
+          '<textarea class="mg-speak-area" id="kg-cmd-text" placeholder="请输入你的命令..."></textarea>' +
+          '<div class="mg-form-actions"><button class="mg-btn mg-btn-primary" data-action="submit-king-cmd">下达命令</button></div>' +
+          '</div>';
+
+        var selectedTargets = [];
+        var btns = panel.querySelectorAll('#kg-target-btns .mg-target-btn');
+        btns.forEach(function (btn) {
+          btn.onclick = function () {
+            var num = parseInt(btn.getAttribute('data-num'), 10);
+            var idx = selectedTargets.indexOf(num);
+            if (idx === -1) {
+              if (selectedTargets.length >= 2) {
+                roche.ui.toast('最多选择2个目标');
+                return;
+              }
+              selectedTargets.push(num);
+              btn.style.background = '#c9a961';
+              btn.style.color = '#0a0a14';
+            } else {
+              selectedTargets.splice(idx, 1);
+              btn.style.background = '';
+              btn.style.color = '';
+            }
+          };
+        });
+
+        panel.querySelector('[data-action="submit-king-cmd"]').onclick = function () {
+          if (selectedTargets.length === 0) {
+            roche.ui.toast('请选择至少一个目标');
+            return;
+          }
+          var typeEl = panel.querySelector('input[name="kg-cmd-type"]:checked');
+          var type = typeEl ? typeEl.value : 'truth';
+          var text = panel.querySelector('#kg-cmd-text').value.trim();
+          if (!text) {
+            roche.ui.toast('请输入具体命令');
+            return;
+          }
+          kingState._pendingResolve = null;
+          resolve({ type: type, targets: selectedTargets, command: text });
+          panel.innerHTML = '';
+        };
+      } else if (promptType === 'target_response') {
+        panel.innerHTML = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">你被国王点到了！</div>' +
+          '<div>你的号码：<b>' + options.targetNumber + '号</b></div>' +
+          '<div>国王号码：<b>' + options.kingNumber + '号</b></div>' +
+          '<div>类型：' + (options.type === 'truth' ? '真心话' : '大冒险') + '</div>' +
+          '<div style="margin-top:6px;padding:10px;background:rgba(201,169,97,0.06);border-radius:3px;font-size:12px;color:#9a8f7a;white-space:pre-wrap;">命令：' + esc(options.command) + '</div>' +
+          '<textarea class="mg-speak-area" id="kg-resp-text" placeholder="请输入你的回应..."></textarea>' +
+          '<div class="mg-form-actions"><button class="mg-btn mg-btn-primary" data-action="submit-resp">提交回应</button></div>' +
+          '</div>';
+
+        panel.querySelector('[data-action="submit-resp"]').onclick = function () {
+          var text = panel.querySelector('#kg-resp-text').value.trim();
+          if (!text) {
+            roche.ui.toast('请输入你的回应');
+            return;
+          }
+          kingState._pendingResolve = null;
+          resolve({ response: text });
+          panel.innerHTML = '';
+        };
+      } else if (promptType === 'other_react') {
+        panel.innerHTML = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">请发表你的反应</div>' +
+          '<div>你的号码：<b>' + options.ownNumber + '号</b></div>' +
+          '<div style="margin-top:8px;padding:10px;background:rgba(201,169,97,0.06);border-radius:3px;font-size:12px;color:#9a8f7a;white-space:pre-wrap;">' + esc(options.event) + '</div>' +
+          '<textarea class="mg-speak-area" id="kg-react-text" placeholder="说说你的反应/吐槽..."></textarea>' +
+          '<div class="mg-form-actions"><button class="mg-btn mg-btn-primary" data-action="submit-react">提交反应</button></div>' +
+          '</div>';
+
+        panel.querySelector('[data-action="submit-react"]').onclick = function () {
+          var text = panel.querySelector('#kg-react-text').value.trim();
+          if (!text) {
+            roche.ui.toast('请输入你的反应');
+            return;
+          }
+          kingState._pendingResolve = null;
+          resolve({ reaction: text });
+          panel.innerHTML = '';
+        };
+      } else if (promptType === 'continue_round') {
+        panel.innerHTML = '<div class="mg-action-panel">' +
+          '<div class="mg-action-panel-title">本轮结束</div>' +
+          '<div class="mg-hint">是否继续下一轮？</div>' +
+          '<div class="mg-form-actions">' +
+          '<button class="mg-btn mg-btn-primary" data-action="next-round">继续下一轮</button>' +
+          '<button class="mg-btn mg-btn-ghost" data-action="end-game">结束游戏</button>' +
+          '</div></div>';
+
+        panel.querySelector('[data-action="next-round"]').onclick = function () {
+          kingState._pendingResolve = null;
+          resolve({ action: 'continue' });
+          panel.innerHTML = '';
+        };
+        panel.querySelector('[data-action="end-game"]').onclick = function () {
+          kingState._pendingResolve = null;
+          resolve({ action: 'end' });
+          panel.innerHTML = '';
+        };
+      } else {
+        resolve(null);
+      }
+    });
+  }
+
+  // 游戏主循环
+  async function kingGameLoop(container, roche) {
+    var st = kingState;
+    if (!st) return;
+    try {
+      while (kingState && !kingState.gameOver) {
+        kingState.round++;
+        saveKingState(roche);
+
+        // 阶段1: 抽国王
+        var kingNum = kingDrawKing(container, roche);
+        if (!kingState || kingState.gameOver) break;
+
+        // 阶段2: 国王下令
+        var command = await kingKingCommand(container, roche, kingNum);
+        if (!kingState || kingState.gameOver) break;
+        if (!command) {
+          appendKingGamelog(container, 'AI 返回异常，请重试。', 'dm');
+          break;
+        }
+
+        // 阶段3: 目标响应
+        var responses = await kingTargetResponse(container, roche, kingNum, command);
+        if (!kingState || kingState.gameOver) break;
+
+        // 阶段4: 其他角色反应
+        await kingOthersReact(container, roche, kingNum, command, responses);
+        if (!kingState || kingState.gameOver) break;
+
+        // 阶段5: 结束本轮
+        var cont = await kingEndRound(container, roche, kingNum, command, responses);
+        if (!kingState || kingState.gameOver) break;
+        if (cont === 'end') {
+          kingState.gameOver = true;
+          break;
+        }
+      }
+    } catch (e) {
+      appendKingGamelog(container, '游戏发生错误: ' + (e && e.message || String(e)), 'dm');
+      appendKingDebug('system', 'loop', '游戏循环异常: ' + (e && e.message || String(e)));
+    } finally {
+      if (kingState) {
+        kingState.gameLoopRunning = false;
+        saveKingState(roche);
+      }
+      if (kingState && kingState.gameOver) {
+        renderKingGameOver(container, roche);
+      }
+    }
+  }
+
+  // 阶段1: 抽国王（前端随机）
+  function kingDrawKing(container, roche) {
+    var st = kingState;
+    if (st.deck.length === 0) {
+      // 重新洗牌
+      st.deck = [];
+      for (var i = 1; i <= st.count; i++) st.deck.push(i);
+      kingShuffle(st.deck);
+    }
+    var kingNum = st.deck.shift();
+    st.currentKing = kingNum;
+    appendKingGamelog(container, '第 ' + st.round + ' 轮开始。本轮国王是 ' + kingNum + ' 号。', 'dm');
+    appendKingDebug('system', '抽国王', '第' + st.round + '轮国王：' + kingNum + '号');
+    rerenderKingPlay(container, roche);
+    saveKingState(roche);
+    return kingNum;
+  }
+
+  // 阶段2: 国王下令
+  async function kingKingCommand(container, roche, kingNum) {
+    var st = kingState;
+    var kingIdx = st.numberMap[kingNum];
+    var kingPlayer = st.players[kingIdx];
+
+    // 国王是 user（非旁观）
+    if (kingPlayer.isUser && !st.spectator) {
+      appendKingGamelog(container, '你是本轮国王，请下令。', 'system');
+      var userInput = await waitForKingUserInput(container, roche, 'king_command', {
+        ownNumber: kingNum,
+        count: st.count
+      });
+      if (!userInput) return null;
+      appendKingGamelog(container, '国王(' + kingNum + '号)下令：' + (userInput.type === 'truth' ? '真心话' : '大冒险') + ' → ' + kingNumList(userInput.targets) + '：' + userInput.command, 'action');
+      appendKingDebug('system', 'user国王下令', JSON.stringify(userInput));
+      return userInput;
+    }
+
+    // AI 国王下令（号码隔离：不含角色名/人设/记忆）
+    var prevRoundsText = '';
+    if (st.rounds && st.rounds.length > 0) {
+      st.rounds.forEach(function (r) {
+        prevRoundsText += '第' + r.round + '轮：国王' + r.king + '号下令' + (r.command.type === 'truth' ? '真心话' : '大冒险') + '给' + r.targets.join(',') + '号。';
+      });
+    }
+
+    var systemMsg = '你是一场国王游戏（真心话大冒险）的国王。\n' +
+      '玩家共有 ' + st.count + ' 人，号码为 1-' + st.count + '。\n' +
+      '你是其中一人，你的号码是 ' + kingNum + ' 号。\n' +
+      '你不知道其他号码对应的是谁，请基于号码下达命令。\n\n' +
+      '请下达一个命令：\n' +
+      '1. 选择类型：真心话（让目标回答问题）或 大冒险（让目标执行动作）\n' +
+      '2. 指定 1-2 个目标号码（不能选你自己的号码 ' + kingNum + '）\n' +
+      '3. 给出具体的命令文本（真心话就给一个有趣的问题，大冒险就给一个具体的动作要求）\n\n' +
+      '命令要有趣、有创意，适合朋友之间玩。不要过于恶意或露骨。\n\n' +
+      (prevRoundsText ? '之前几轮的记录（供参考，不要重复）：\n' + prevRoundsText + '\n\n' : '') +
+      '返回 JSON（严格格式，不要包含其他文字）：\n' +
+      '{ "type": "truth" 或 "dare", "targets": [号码数组], "command": "具体命令文本" }';
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请下达命令。' }
+    ];
+    appendKingDebug('prompt', '国王下令', JSON.stringify(messages, null, 2));
+
+    appendKingGamelog(container, '国王(' + kingNum + '号)正在思考命令…', 'transition');
+    var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.9 }, '国王下令');
+    if (!result || !result.ok || !result.parsed) {
+      appendKingDebug('system', '国王下令', 'AI返回异常');
+      return null;
+    }
+    var cmd = result.parsed;
+    appendKingDebug('response', '国王下令', result.text);
+    // 校验
+    if (!cmd.type || (cmd.type !== 'truth' && cmd.type !== 'dare')) return null;
+    if (!Array.isArray(cmd.targets) || cmd.targets.length === 0 || cmd.targets.length > 2) return null;
+    // 过滤掉自己的号码与越界号码
+    cmd.targets = cmd.targets.filter(function (t) {
+      return t !== kingNum && t >= 1 && t <= st.count;
+    });
+    if (cmd.targets.length === 0) return null;
+    if (!cmd.command || typeof cmd.command !== 'string') return null;
+
+    appendKingGamelog(container, '国王(' + kingNum + '号)下令：' + (cmd.type === 'truth' ? '真心话' : '大冒险') + ' → ' + kingNumList(cmd.targets) + '：' + cmd.command, 'action');
+    return cmd;
+  }
+
+  // 阶段3: 目标响应
+  async function kingTargetResponse(container, roche, kingNum, command) {
+    var st = kingState;
+    var responses = [];
+
+    // 找出目标玩家
+    var targetPlayers = [];
+    command.targets.forEach(function (num) {
+      var idx = st.numberMap[num];
+      if (idx != null) {
+        targetPlayers.push({ number: num, player: st.players[idx] });
+      }
+    });
+
+    // 分离 user 和 AI 目标
+    var userTargets = [];
+    var aiTargets = [];
+    targetPlayers.forEach(function (t) {
+      if (t.player.isUser && !st.spectator) {
+        userTargets.push(t);
+      } else {
+        aiTargets.push(t);
+      }
+    });
+
+    // user 目标：逐个等待输入
+    for (var i = 0; i < userTargets.length; i++) {
+      var t = userTargets[i];
+      appendKingGamelog(container, kingNumLabel(t.number) + ' 被国王点到，请回应。', 'system');
+      var userInput = await waitForKingUserInput(container, roche, 'target_response', {
+        targetNumber: t.number,
+        kingNumber: kingNum,
+        type: command.type,
+        command: command.command
+      });
+      if (userInput && userInput.response) {
+        responses.push({ number: t.number, player: t.player, response: userInput.response, responseZh: '' });
+        appendKingGamelog(container, kingNumLabel(t.number) + ' 回应：' + userInput.response, 'speech');
+        appendKingCharHistory(t.player, st.round, 'response', '你被国王' + kingNum + '号点到做' + (command.type === 'truth' ? '真心话' : '大冒险') + '：' + command.command + '。你的回应：' + userInput.response);
+      }
+    }
+
+    // AI 目标
+    if (aiTargets.length > 0) {
+      if (st.mode === 'batch') {
+        appendKingGamelog(container, 'AI 目标正在回应…', 'transition');
+        var batchResult = await kingBatchTargetResponse(container, roche, kingNum, command, aiTargets);
+        if (batchResult && batchResult.length > 0) {
+          responses = responses.concat(batchResult);
+        }
+      } else {
+        // polling 模式：逐个处理
+        for (var j = 0; j < aiTargets.length; j++) {
+          var at = aiTargets[j];
+          appendKingGamelog(container, kingNumLabel(at.number) + ' 正在回应…', 'transition');
+          var resp = await kingSingleTargetResponse(container, roche, kingNum, command, at);
+          if (resp) {
+            responses.push(resp);
+          }
+        }
+      }
+    }
+
+    return responses;
+  }
+
+  // 单个 AI 目标响应（polling 模式，视野隔离）
+  async function kingSingleTargetResponse(container, roche, kingNum, command, target) {
+    var st = kingState;
+    var player = target.player;
+    var memoryText = await getKingCharMemoryText(roche, player);
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+    var ownHistory = kingGetCharHistoryText(player);
+
+    var systemMsg = '【人格优先级宣言】\n' +
+      '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。\n\n' +
+      '【这只是游戏】\n这就是一群朋友在线上玩一局国王游戏（真心话大冒险）而已。放轻松，像和朋友打游戏一样。\n\n' +
+      '【你的角色信息】\n' +
+      '名字：' + player.name + '\n' +
+      '你的号码：' + target.number + '号\n' +
+      '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
+      '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
+      '\n【游戏公开记录】\n' + publicLogText + '\n' +
+      '\n【你的个人视角记录】\n' + ownHistory + '\n' +
+      '\n【当前情境】\n' +
+      '你被国王(' + kingNum + '号)点到要做' + (command.type === 'truth' ? '真心话' : '大冒险') + '。\n' +
+      '国王的命令：' + command.command + '\n\n' +
+      '【号码隔离】\n你不知道国王是谁，也不知道其他号码对应谁。只知道国王的号码是' + kingNum + '号。\n\n' +
+      '【输出要求】\n请以严格JSON格式回复，不要包含任何其他文字：\n' +
+      '{ "response": "<你的回应文本，用你的口吻说>", "responseZh": "<仅当你是非中文母语者：response的中文翻译；否则留空字符串>" }';
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请回应国王的命令。' }
+    ];
+    appendKingDebug('prompt', '目标回应-' + player.name, JSON.stringify(messages, null, 2));
+
+    var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.85 }, '目标回应-' + player.name);
+    if (!result || !result.ok || !result.parsed) {
+      appendKingGamelog(container, kingNumLabel(target.number) + ' 回应失败（AI异常）', 'dm');
+      appendKingDebug('system', '目标回应-' + player.name, 'AI返回异常');
+      return null;
+    }
+    var resp = result.parsed.response || '';
+    var respZh = result.parsed.responseZh || '';
+    appendKingGamelog(container, kingNumLabel(target.number) + ' 回应：' + resp, 'speech', respZh);
+    appendKingDebug('response', '目标回应-' + player.name, result.text);
+    appendKingCharHistory(player, st.round, 'response', '你被国王' + kingNum + '号点到做' + (command.type === 'truth' ? '真心话' : '大冒险') + '：' + command.command + '。你的回应：' + resp);
+
+    return { number: target.number, player: player, response: resp, responseZh: respZh };
+  }
+
+  // 批量 AI 目标响应（batch 模式）
+  async function kingBatchTargetResponse(container, roche, kingNum, command, aiTargets) {
+    var st = kingState;
+    var charListText = '';
+    for (var i = 0; i < aiTargets.length; i++) {
+      var t = aiTargets[i];
+      var p = t.player;
+      var mem = await getKingCharMemoryText(roche, p);
+      var ownHistory = kingGetCharHistoryText(p);
+      charListText += '\n--- 目标' + (i + 1) + '：' + t.number + '号 ---\n';
+      charListText += '名字：' + p.name + '\n';
+      charListText += '号码：' + t.number + '号\n';
+      charListText += '人设：' + (p.personaText || '(无)') + '\n';
+      charListText += '记忆：' + (mem || '(无)') + '\n';
+      charListText += '个人视角记录：' + (ownHistory || '(无)') + '\n';
+    }
+
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+
+    var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n' +
+      '【人格优先级宣言】每个角色的说话方式是人格的产物，不能为了游戏改变。\n' +
+      '【这只是游戏】朋友之间玩的游戏，放轻松。\n\n' +
+      '【游戏公开记录】\n' + publicLogText + '\n\n' +
+      '【当前情境】\n' +
+      '国王(' + kingNum + '号)下令：' + (command.type === 'truth' ? '真心话' : '大冒险') + '\n' +
+      '命令：' + command.command + '\n\n' +
+      '【需要回应的目标角色】\n' +
+      '以下是每个目标角色的人设和记忆，请分别以各自的口吻回应国王的命令。\n' +
+      charListText + '\n\n' +
+      '【号码隔离】\n角色不知道国王是谁，只知道国王的号码。也不知道其他号码对应谁。\n\n' +
+      '【输出要求】\n请以严格JSON数组格式回复，不要包含任何其他文字：\n' +
+      '[ { "number": <号码整数>, "response": "<该角色的回应文本>", "responseZh": "<中文翻译或空字符串>" } ]\n' +
+      '包含所有 ' + aiTargets.length + ' 个目标角色。';
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请生成所有目标角色的回应。' }
+    ];
+    appendKingDebug('prompt', '批量目标回应', JSON.stringify(messages, null, 2));
+
+    var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.85 }, '批量目标回应');
+    if (!result || !result.ok || !result.parsed) {
+      appendKingDebug('system', '批量目标回应', 'AI返回异常');
+      return [];
+    }
+    appendKingDebug('response', '批量目标回应', result.text);
+    var arr = result.parsed;
+    if (!Array.isArray(arr)) arr = [arr];
+
+    var responses = [];
+    aiTargets.forEach(function (t) {
+      var found = null;
+      for (var k = 0; k < arr.length; k++) {
+        if (arr[k].number === t.number) { found = arr[k]; break; }
+      }
+      if (found && found.response) {
+        var resp = found.response;
+        var respZh = found.responseZh || '';
+        appendKingGamelog(container, kingNumLabel(t.number) + ' 回应：' + resp, 'speech', respZh);
+        appendKingCharHistory(t.player, st.round, 'response', '你被国王' + kingNum + '号点到做' + (command.type === 'truth' ? '真心话' : '大冒险') + '：' + command.command + '。你的回应：' + resp);
+        responses.push({ number: t.number, player: t.player, response: resp, responseZh: respZh });
+      }
+    });
+    return responses;
+  }
+
+  // 阶段4: 其他角色反应
+  async function kingOthersReact(container, roche, kingNum, command, responses) {
+    var st = kingState;
+    var targetNumbers = command.targets.slice();
+    var others = [];
+    st.players.forEach(function (p) {
+      if (p.number === kingNum) return;
+      if (targetNumbers.indexOf(p.number) !== -1) return;
+      others.push(p);
+    });
+
+    if (others.length === 0) return;
+
+    // 分离 user 与 AI
+    var userOthers = others.filter(function (p) { return p.isUser && !st.spectator; });
+    var aiOthers = others.filter(function (p) { return !p.isUser || st.spectator; });
+
+    // 构建公开事件文本（号码隔离）
+    var eventText = '国王' + kingNum + '号下令：' + (command.type === 'truth' ? '真心话' : '大冒险') + '，目标：' + kingNumList(command.targets) + '。\n命令：' + command.command;
+    responses.forEach(function (r) {
+      eventText += '\n' + r.number + '号的回应：' + r.response;
+    });
+
+    // user 反应
+    for (var i = 0; i < userOthers.length; i++) {
+      var u = userOthers[i];
+      appendKingGamelog(container, kingNumLabel(u.number) + ' 请发表你的反应。', 'system');
+      var userInput = await waitForKingUserInput(container, roche, 'other_react', {
+        ownNumber: u.number,
+        event: eventText
+      });
+      if (userInput && userInput.reaction) {
+        appendKingGamelog(container, kingNumLabel(u.number) + ' 反应：' + userInput.reaction, 'speech');
+        appendKingCharHistory(u, st.round, 'react', '本轮事件：' + eventText + '。你的反应：' + userInput.reaction);
+      }
+    }
+
+    // AI 反应
+    if (aiOthers.length === 0) return;
+
+    if (st.mode === 'batch') {
+      appendKingGamelog(container, '其他玩家正在反应…', 'transition');
+      await kingBatchOthersReact(container, roche, kingNum, command, responses, eventText, aiOthers);
+    } else {
+      for (var j = 0; j < aiOthers.length; j++) {
+        var p = aiOthers[j];
+        appendKingGamelog(container, kingNumLabel(p.number) + ' 正在反应…', 'transition');
+        await kingSingleOtherReact(container, roche, kingNum, command, responses, eventText, p);
+      }
+    }
+  }
+
+  // 单个 AI 反应（polling 模式）
+  async function kingSingleOtherReact(container, roche, kingNum, command, responses, eventText, player) {
+    var st = kingState;
+    var memoryText = await getKingCharMemoryText(roche, player);
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+    var ownHistory = kingGetCharHistoryText(player);
+
+    var systemMsg = '【人格优先级宣言】\n你的第一身份是"一个人"。说话方式是人格的产物，不能为了游戏改变。\n\n' +
+      '【这只是游戏】朋友之间玩国王游戏（真心话大冒险），放轻松。\n\n' +
+      '【你的角色信息】\n' +
+      '名字：' + player.name + '\n' +
+      '你的号码：' + player.number + '号\n' +
+      '\n【你的人设】\n' + (player.personaText || '(无)') + '\n' +
+      '\n【你的记忆】\n' + (memoryText || '(无)') + '\n' +
+      '\n【游戏公开记录】\n' + publicLogText + '\n' +
+      '\n【你的个人视角记录】\n' + ownHistory + '\n' +
+      '\n【本轮发生的事】\n' + eventText + '\n\n' +
+      '【号码隔离】\n你不知道国王是谁，也不知道目标是谁，只知道他们的号码。你也不知道其他号码对应谁。\n\n' +
+      '【输出要求】\n请以严格JSON格式回复，不要包含其他文字：\n' +
+      '{ "reaction": "<你作为旁观者的反应/吐槽/评论，用你的口吻说>", "reactionZh": "<中文翻译或空字符串>" }';
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请发表你对本轮事件的反应。' }
+    ];
+    appendKingDebug('prompt', '反应-' + player.name, JSON.stringify(messages, null, 2));
+
+    var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.85 }, '反应-' + player.name);
+    if (!result || !result.ok || !result.parsed) {
+      appendKingGamelog(container, kingNumLabel(player.number) + ' 反应失败', 'dm');
+      appendKingDebug('system', '反应-' + player.name, 'AI返回异常');
+      return;
+    }
+    var reaction = result.parsed.reaction || '';
+    var reactionZh = result.parsed.reactionZh || '';
+    appendKingGamelog(container, kingNumLabel(player.number) + ' 反应：' + reaction, 'speech', reactionZh);
+    appendKingDebug('response', '反应-' + player.name, result.text);
+    appendKingCharHistory(player, st.round, 'react', '本轮事件：' + eventText + '。你的反应：' + reaction);
+  }
+
+  // 批量 AI 反应（batch 模式）
+  async function kingBatchOthersReact(container, roche, kingNum, command, responses, eventText, aiOthers) {
+    var st = kingState;
+    var charListText = '';
+    for (var i = 0; i < aiOthers.length; i++) {
+      var p = aiOthers[i];
+      var mem = await getKingCharMemoryText(roche, p);
+      var ownHistory = kingGetCharHistoryText(p);
+      charListText += '\n--- 角色' + (i + 1) + '：' + p.number + '号 ---\n';
+      charListText += '名字：' + p.name + '\n';
+      charListText += '号码：' + p.number + '号\n';
+      charListText += '人设：' + (p.personaText || '(无)') + '\n';
+      charListText += '记忆：' + (mem || '(无)') + '\n';
+      charListText += '个人视角记录：' + (ownHistory || '(无)') + '\n';
+    }
+
+    var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
+
+    var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n' +
+      '【人格优先级宣言】每个角色的说话方式是人格的产物。\n' +
+      '【这只是游戏】朋友之间玩的游戏。\n\n' +
+      '【游戏公开记录】\n' + publicLogText + '\n\n' +
+      '【本轮发生的事】\n' + eventText + '\n\n' +
+      '【需要反应的角色】\n以下是每个角色的人设和记忆，请分别以各自的口吻发表对本轮事件的反应/吐槽/评论。\n' +
+      charListText + '\n\n' +
+      '【号码隔离】角色不知道其他号码对应谁，只知道号码。\n\n' +
+      '【输出要求】\n请以严格JSON数组格式回复，不要包含其他文字：\n' +
+      '[ { "number": <号码整数>, "reaction": "<该角色的反应文本>", "reactionZh": "<中文翻译或空字符串>" } ]\n' +
+      '包含所有 ' + aiOthers.length + ' 个角色。';
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请生成所有角色的反应。' }
+    ];
+    appendKingDebug('prompt', '批量反应', JSON.stringify(messages, null, 2));
+
+    var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.85 }, '批量反应');
+    if (!result || !result.ok || !result.parsed) {
+      appendKingDebug('system', '批量反应', 'AI返回异常');
+      return;
+    }
+    appendKingDebug('response', '批量反应', result.text);
+
+    var arr = result.parsed;
+    if (!Array.isArray(arr)) arr = [arr];
+
+    aiOthers.forEach(function (p) {
+      var found = null;
+      for (var k = 0; k < arr.length; k++) {
+        if (arr[k].number === p.number) { found = arr[k]; break; }
+      }
+      if (found && found.reaction) {
+        var reaction = found.reaction;
+        var reactionZh = found.reactionZh || '';
+        appendKingGamelog(container, kingNumLabel(p.number) + ' 反应：' + reaction, 'speech', reactionZh);
+        appendKingCharHistory(p, st.round, 'react', '本轮事件：' + eventText + '。你的反应：' + reaction);
+      }
+    });
+  }
+
+  // 阶段5: 结束本轮
+  async function kingEndRound(container, roche, kingNum, command, responses) {
+    var st = kingState;
+    // 记录本轮
+    var roundRecord = {
+      round: st.round,
+      king: kingNum,
+      command: { type: command.type, targets: command.targets.slice(), command: command.command },
+      targets: command.targets.slice(),
+      responses: responses.map(function (r) {
+        return { number: r.number, response: r.response, responseZh: r.responseZh || '' };
+      })
+    };
+    st.rounds.push(roundRecord);
+
+    // 更新公开日志（号码隔离）
+    var summary = '第' + st.round + '轮：国王' + kingNum + '号下令' + (command.type === 'truth' ? '真心话' : '大冒险') + '给' + kingNumList(command.targets) + '，命令：' + command.command;
+    responses.forEach(function (r) {
+      summary += '；' + r.number + '号回应：' + r.response;
+    });
+    st.publicLog.push(summary);
+
+    saveKingState(roche);
+
+    // 询问继续
+    appendKingGamelog(container, '第 ' + st.round + ' 轮结束。', 'system');
+    var result = await waitForKingUserInput(container, roche, 'continue_round', {});
+    if (!result) return 'end';
+    return result.action || 'continue';
+  }
+
+  // 赛后总结主流程
+  async function renderKingGameOver(container, roche) {
+    var st = kingState;
+    if (!st) return;
+    if (st._debriefInProgress) return;
+
+    // 游戏结束，清除存档（fire-and-forget）
+    clearKingSave(roche);
+
+    st.phase = "over";
+    renderKingGameOverScreen(container, roche);
+
+    // 全局总结
+    if (!st.gameSummary) {
+      renderKingGameOverScreen(container, roche);
+      try {
+        if (!kingState) return;
+        st.gameSummary = await generateKingSummary(roche);
+      } catch (e) {
+        st.gameSummary = null;
+        appendKingDebug('system', '全局总结', 'error: ' + (e && e.message || e));
+      }
+      if (!kingState) return;
+      renderKingGameOverScreen(container, roche);
+    }
+
+    // 角色记忆
+    if (!st.charMemories) {
+      st._debriefInProgress = true;
+      st.charMemories = [];
+      renderKingGameOverScreen(container, roche);
+      try {
+        if (!kingState) return;
+        st.charMemories = await generateKingCharMemories(roche);
+      } catch (e) {
+        appendKingDebug('system', '角色记忆', 'error: ' + (e && e.message || e));
+        st.charMemories = [];
+      }
+      if (!kingState) return;
+      renderKingGameOverScreen(container, roche);
+      st._debriefInProgress = false;
+    }
+  }
+
+  // 生成全局总结
+  async function generateKingSummary(roche) {
+    var st = kingState;
+    if (!st) return null;
+
+    var roster = st.players.map(function (p) {
+      var displayName = p.name;
+      if (p.realName && p.handle && p.realName !== p.handle) {
+        displayName = p.realName + '/' + p.handle;
+      } else if (p.realName && p.realName !== p.name) {
+        displayName = p.realName + '/' + p.name;
+      }
+      return p.number + '号: ' + displayName + (p.isUser ? '(你)' : '');
+    }).join('、');
+
+    var roundsText = '';
+    if (st.rounds && st.rounds.length > 0) {
+      st.rounds.forEach(function (r) {
+        roundsText += '第' + r.round + '轮：国王' + r.king + '号下令' + (r.command.type === 'truth' ? '真心话' : '大冒险') + '给' + r.targets.join(',') + '号，命令：' + r.command.command + '。';
+        r.responses.forEach(function (resp) {
+          roundsText += resp.number + '号回应：' + resp.response + ' ';
+        });
+        roundsText += '\n';
+      });
+    }
+
+    var systemMsg = '请为以下国王游戏（真心话大冒险）生成一份全局总结记忆。\n' +
+      '要求：\n' +
+      '1. 开头先列出参与者名单，标明每个人的号码、真名和用户名，例如："参与者：1号 沈砚/阿砚、2号 张三/san"\n' +
+      '2. 用两句话简述游戏规则（国王点号不点名，被点到的人做真心话或大冒险）\n' +
+      '3. 描述每轮经过（国王几号下令什么、目标几号做了什么）\n' +
+      '4. 全文300字以内，简洁明了，像旁观者的记录\n' +
+      '5. 用中文写\n' +
+      '6. 返回 JSON：{ summary: "总结文本" }\n\n' +
+      '参与者名单：\n' + roster + '\n\n' +
+      '各轮记录：\n' + (roundsText || '(无)');
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请生成全局总结，返回 JSON。' }
+    ];
+    appendKingDebug('prompt', '全局总结', JSON.stringify(messages, null, 2));
+
+    try {
+      var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.6 }, '全局总结');
+      if (result && result.ok && result.parsed && result.parsed.summary) {
+        appendKingDebug('response', '全局总结', result.text);
+        return { summary: result.parsed.summary };
+      }
+      if (result && result.text) {
+        appendKingDebug('response', '全局总结', result.text);
+        return { summary: result.text.slice(0, 500) };
+      }
+      return null;
+    } catch (e) {
+      appendKingDebug('system', '全局总结', 'error: ' + (e && e.message || e));
+      return null;
+    }
+  }
+
+  // 生成角色记忆
+  async function generateKingCharMemories(roche) {
+    var st = kingState;
+    if (!st) return [];
+
+    var charList = st.players.filter(function (p) { return !p.isUser; }).map(function (p) {
+      return p.number + '号 ' + p.name;
+    }).join('、');
+
+    var roster = st.players.map(function (p) {
+      return p.number + '号: ' + p.name + (p.isUser ? '(你)' : '');
+    }).join('\n');
+
+    var roundsText = '';
+    if (st.rounds && st.rounds.length > 0) {
+      st.rounds.forEach(function (r) {
+        roundsText += '第' + r.round + '轮：国王' + r.king + '号下令' + (r.command.type === 'truth' ? '真心话' : '大冒险') + '给' + r.targets.join(',') + '号，命令：' + r.command.command + '。';
+        r.responses.forEach(function (resp) {
+          roundsText += resp.number + '号回应：' + resp.response + ' ';
+        });
+        roundsText += '\n';
+      });
+    }
+
+    // 为每个角色构建其视角
+    var charViews = '';
+    st.players.filter(function (p) { return !p.isUser; }).forEach(function (p) {
+      var key = p.id + '_' + p.number;
+      var hist = (st.charHistory && st.charHistory[key]) ? st.charHistory[key].map(function (h) {
+        return '[第' + h.round + '轮 ' + h.phase + '] ' + h.content;
+      }).join('\n') : '(无)';
+      charViews += '\n--- ' + p.number + '号 ' + p.name + ' ---\n';
+      charViews += '人设：' + (p.personaText || '(无)') + '\n';
+      charViews += '视角记录：\n' + hist + '\n';
+    });
+
+    var systemMsg = '你是一群角色的记忆记录员。请为以下每个角色生成一份本轮国王游戏（真心话大冒险）的记忆记录。\n' +
+      '要求：\n' +
+      '1. 每份记忆以该角色自己的口吻写，像日记或回忆\n' +
+      '2. 记录该角色视角下经历的事：自己被点到做真心话/大冒险、自己的回应、自己作为旁观者的反应等\n' +
+      '3. 该角色只能知道自己该知道的（不知道其他号码对应谁，除非游戏公开）\n' +
+      '4. 用该角色的母语写\n' +
+      '5. 每份记忆 100-200 字\n' +
+      '6. 返回 JSON 数组，每项 { name, memory, memoryZh }\n' +
+      '   - name: 角色名\n' +
+      '   - memory: 母语记忆（中文母语者就用中文）\n' +
+      '   - memoryZh: 中文翻译（中文母语者留空）\n' +
+      '7. 包含所有非用户角色\n\n' +
+      '玩家名单：\n' + roster + '\n\n' +
+      '需要生成记忆的角色：' + charList + '\n\n' +
+      '各轮公开记录：\n' + (roundsText || '(无)') + '\n\n' +
+      '各角色视角记录：\n' + charViews;
+
+    var messages = [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: '请生成这些角色的游戏记忆，返回 JSON 数组。' }
+    ];
+    appendKingDebug('prompt', '角色记忆', JSON.stringify(messages, null, 2));
+
+    try {
+      var result = await kingAiChatJson(roche, { messages: messages, temperature: 0.7 }, '角色记忆');
+      if (result && result.ok && result.parsed) {
+        appendKingDebug('response', '角色记忆', result.text);
+        var arr = result.parsed;
+        if (!Array.isArray(arr)) arr = [arr];
+        return arr;
+      }
+      return [];
+    } catch (e) {
+      appendKingDebug('system', '角色记忆', 'error: ' + (e && e.message || e));
+      return [];
+    }
+  }
+
+  // 赛后界面 + 记忆注入 UI
+  function renderKingGameOverScreen(container, roche) {
+    var st = kingState;
+    if (!st) return;
+
+    var seatsHtml = '';
+    st.players.forEach(function (p) {
+      var cls = 'mg-seat-card';
+      if (p.isUser) cls += ' is-user';
+      seatsHtml +=
+        '<div class="' + cls + '">' +
+        '<div class="mg-seat-num">' + p.number + '号</div>' +
+        '<div class="mg-seat-name">' + esc(p.name) + '</div>' +
+        '<div class="mg-seat-status">' + (p.isUser ? '你' : '') + '</div>' +
+        '</div>';
+    });
+
+    var logHtml = '';
+    if (Array.isArray(st.gamelogLines)) {
+      st.gamelogLines.forEach(function (line) {
+        logHtml += formatGamelogLineHTML(line);
+      });
+    }
+
+    // 全局总结
+    var summaryHtml = '';
+    if (st.gameSummary && st.gameSummary.summary) {
+      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
+        '<div class="mg-card" style="text-align:left;display:block;padding:14px 16px;background:linear-gradient(135deg,rgba(201,169,97,0.08) 0%,rgba(13,13,26,0.4) 100%);border-color:rgba(201,169,97,0.3);">' +
+        '<div style="font-size:13px;line-height:1.7;color:#e8e4d8;white-space:pre-wrap;">' + esc(st.gameSummary.summary) + '</div>' +
+        '<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">' +
+        '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-summary-dm">注入为事实记忆</button>' +
+        '<select class="mg-input" id="kg-summary-conv-select" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择会话...</option></select>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-summary-msg">注入为消息</button>' +
+        '</div>' +
+        '</div>';
+    } else if (!st.gameSummary) {
+      summaryHtml = '<div class="mg-phase-label" style="margin-top:18px;">全局总结</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成全局总结中...</div>';
+    }
+
+    // 角色记忆
+    var memoriesHtml = '';
+    if (!st.charMemories) {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">生成角色记忆中...</div>';
+    } else if (st.charMemories.length === 0) {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>' +
+        '<div class="mg-hint" style="padding:14px;text-align:center;">（无角色记忆，可能生成失败）</div>';
+    } else {
+      memoriesHtml = '<div class="mg-phase-label" style="margin-top:18px;">角色记忆</div>';
+      memoriesHtml += '<div style="margin-top:10px;padding:12px 14px;background:rgba(201,169,97,0.08);border:1px solid rgba(201,169,97,0.25);border-radius:3px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">' +
+        '<span style="color:#c9a961;font-size:13px;font-weight:600;letter-spacing:0.04em;">批量注入</span>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-all-dm">全部注入到各自单聊</button>' +
+        '<select class="mg-input" id="kg-batch-group-select" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择群聊...</option></select>' +
+        '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-all-group">全部注入到该群聊</button>' +
+        '</div>';
+      st.charMemories.forEach(function (m) {
+        var name = m.name || '';
+        var memory = m.memory || '';
+        var memoryZh = m.memoryZh || '';
+        var trId = 'kg-mem-tr-' + Math.random().toString(36).slice(2, 8);
+        var transHtml = '';
+        if (memoryZh && memoryZh.trim() && memoryZh !== memory) {
+          transHtml = '<span class="mg-trans-toggle" data-tr="' + trId + '" data-display="block" style="color:#c9a961;cursor:pointer;font-size:11px;border:1px solid rgba(201,169,97,0.5);border-radius:3px;padding:0 5px;margin-top:6px;display:inline-block;letter-spacing:0.05em;">译</span>' +
+            '<div class="mg-trans-zh" id="' + trId + '" data-display="block" style="display:none;color:#9a8f7a;margin-top:6px;font-style:italic;white-space:pre-wrap;">' + esc(memoryZh) + '</div>';
+        }
+        memoriesHtml +=
+          '<div class="mg-card" style="text-align:left;display:block;padding:14px 16px;">' +
+          '<div style="font-weight:600;color:#c9a961;font-family:Georgia,serif;letter-spacing:0.04em;">' + esc(name) + '</div>' +
+          '<div style="margin-top:8px;font-size:13px;line-height:1.6;color:#e8e4d8;white-space:pre-wrap;">' + esc(memory) + '</div>' +
+          transHtml +
+          '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">' +
+          '<button class="mg-btn mg-btn-sm mg-btn-primary" data-action="inject-dm" data-name="' + esc(name) + '">注入到单聊</button>' +
+          '<select class="mg-input" data-kg-conv-select="' + esc(name) + '" style="padding:5px 10px;font-size:12px;max-width:200px;"><option value="">选择群聊...</option></select>' +
+          '<button class="mg-btn mg-btn-sm mg-btn-ghost" data-action="inject-group" data-name="' + esc(name) + '">注入到群聊</button>' +
+          '</div>' +
+          '</div>';
+      });
+    }
+
+    var html =
+      '<div class="mini-games-root">' +
+      '<div class="mg-header">' +
+      '<h1 class="mg-title">国王游戏 · 结束</h1>' +
+      '<div class="mg-actions">' +
+      '<button class="mg-btn mg-btn-ghost" data-action="back" title="返回大厅">返回大厅</button>' +
+      '<button class="mg-btn mg-btn-ghost" data-action="close" title="关闭">关闭</button>' +
+      '</div>' +
+      '</div>' +
+      '<div class="mg-content">' +
+      '<div class="mg-form-wrap">' +
+      '<div class="mg-game-over">' +
+      '<div class="mg-game-over-title mg-game-over-good">游戏结束</div>' +
+      '<div>共 ' + st.round + ' 轮</div>' +
+      '</div>' +
+      '<div class="mg-seats-grid">' + seatsHtml + '</div>' +
+      summaryHtml +
+      memoriesHtml +
+      '<div class="mg-phase-label" style="margin-top:18px;">本局记录</div>' +
+      '<div class="mg-gamelog" id="kg-gamelog">' + logHtml + '</div>' +
+      '<div class="mg-form-actions">' +
+      '<button class="mg-btn mg-btn-primary" data-action="back-hub">返回大厅</button>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div id="kg-debug-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:90%;max-width:640px;height:75%;background:#0d0d20;border:1px solid #c9a961;border-radius:12px;z-index:9999;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.6);">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(201,169,97,0.2);">' +
+      '<span style="color:#c9a961;font-weight:600;font-family:Georgia,serif;letter-spacing:0.05em;">系统日志</span>' +
+      '<button class="mg-btn mg-btn-ghost mg-btn-sm" data-action="close-debug">关闭日志</button>' +
+      '</div>' +
+      '<div id="kg-debug-panel-content" style="flex:1;overflow-y:auto;padding:10px 14px;"></div>' +
+      '</div>' +
+      '</div>';
+
+    container.innerHTML = html;
+    st._container = container;
+
+    // 双击标题打开系统日志
+    var titleEl = container.querySelector('.mg-title');
+    if (titleEl) {
+      titleEl.style.cursor = 'pointer';
+      titleEl.title = '双击打开系统日志';
+      titleEl.ondblclick = function () {
+        var panel = container.querySelector('#kg-debug-panel');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+          renderKingDebugPanelContent(container);
+          panel.style.display = 'flex';
+        } else {
+          panel.style.display = 'none';
+        }
+      };
+    }
+
+    var logEl = container.querySelector('#kg-gamelog');
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+
+    container.querySelector('[data-action="back"]').onclick = function () {
+      kingState = null;
+      showHub(container, roche);
+    };
+    container.querySelector('[data-action="close"]').onclick = function () {
+      roche.ui.closeApp();
+    };
+    container.querySelector('[data-action="back-hub"]').onclick = function () {
+      kingState = null;
+      showHub(container, roche);
+    };
+
+    var closeDebugBtn = container.querySelector('[data-action="close-debug"]');
+    if (closeDebugBtn) {
+      closeDebugBtn.onclick = function () {
+        var panel = container.querySelector('#kg-debug-panel');
+        if (panel) panel.style.display = 'none';
+      };
+    }
+
+    // 译切换事件委托（容器级，只挂一次）
+    if (!container._wwTransDelegation) {
+      container.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.classList && t.classList.contains('mg-trans-toggle')) {
+          var id = t.getAttribute('data-tr');
+          var zh = id ? document.getElementById(id) : null;
+          if (zh) {
+            var showDisplay = zh.getAttribute('data-display') || 'inline';
+            zh.style.display = (zh.style.display === 'none' || !zh.style.display) ? showDisplay : 'none';
+          }
+        }
+      });
+      container._wwTransDelegation = true;
+    }
+
+    // 异步填充每个角色记忆卡片的群聊下拉
+    if (roche.conversation && typeof roche.conversation.list === 'function') {
+      roche.conversation.list().then(function (conversations) {
+        if (!Array.isArray(conversations)) return;
+        var groupConvs = conversations.filter(function (c) {
+          return c.isGroup && (c.id || c.conversationId);
+        });
+        var convSelects = container.querySelectorAll('select[data-kg-conv-select]');
+        convSelects.forEach(function (sel) {
+          groupConvs.forEach(function (c) {
+            var cid = c.id || c.conversationId;
+            var label = c.name || c.title || c.handle || cid;
+            var opt = document.createElement('option');
+            opt.value = cid;
+            opt.text = label;
+            sel.appendChild(opt);
+          });
+        });
+        var batchSel = container.querySelector('#kg-batch-group-select');
+        if (batchSel) {
+          groupConvs.forEach(function (c) {
+            var cid = c.id || c.conversationId;
+            var label = c.name || c.title || c.handle || cid;
+            var opt = document.createElement('option');
+            opt.value = cid;
+            opt.text = label;
+            batchSel.appendChild(opt);
+          });
+        }
+      }).catch(function () { /* 忽略列表加载失败 */ });
+    }
+
+    // 填充总结会话下拉
+    var summaryConvSel = container.querySelector('#kg-summary-conv-select');
+    if (summaryConvSel && roche.conversation) {
+      roche.conversation.list().then(function (conversations) {
+        if (!Array.isArray(conversations)) return;
+        conversations.forEach(function (c) {
+          var cid = c.id || c.conversationId;
+          if (!cid) return;
+          var prefix = c.isGroup ? '[群]' : '[单]';
+          var label = prefix + ' ' + (c.name || c.title || c.handle || cid);
+          var opt = document.createElement('option');
+          opt.value = cid;
+          opt.text = label;
+          summaryConvSel.appendChild(opt);
+        });
+      }).catch(function () { });
+    }
+
+    // 注入到单聊：以角色身份注入到该角色的私聊会话
+    var injectDmBtns = container.querySelectorAll('[data-action="inject-dm"]');
+    injectDmBtns.forEach(function (btn) {
+      btn.onclick = async function () {
+        var name = btn.getAttribute('data-name');
+        if (!name) return;
+        var mem = st.charMemories ? st.charMemories.find(function (m) { return m.name === name; }) : null;
+        if (!mem) { roche.ui.toast('未找到该角色的记忆'); return; }
+        var memoryText = mem.memory || '';
+        if (mem.memoryZh && mem.memoryZh.trim() && mem.memoryZh !== mem.memory) {
+          memoryText += '\n\n【中文翻译】\n' + mem.memoryZh;
+        }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var char = chars.find(function (c) {
+            return (c.handle || c.name) === name || c.name === name;
+          });
+          if (!char) { roche.ui.toast('未找到该角色'); return; }
+          if (!char.conversationId) { roche.ui.toast('该角色没有绑定单聊'); return; }
+          var senderName = char.handle || char.name || name;
+          await injectMessageToRoche(char.conversationId, '【国王游戏记忆】\n' + memoryText, 'char', char.id, senderName);
+          roche.ui.toast('已注入到 ' + name + ' 的单聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    });
+
+    // 注入到群聊：以角色身份注入到选定的群聊会话
+    var injectGroupBtns = container.querySelectorAll('[data-action="inject-group"]');
+    injectGroupBtns.forEach(function (btn) {
+      btn.onclick = async function () {
+        var name = btn.getAttribute('data-name');
+        if (!name) return;
+        var mem = st.charMemories ? st.charMemories.find(function (m) { return m.name === name; }) : null;
+        if (!mem) { roche.ui.toast('未找到该角色的记忆'); return; }
+        var memoryText = mem.memory || '';
+        if (mem.memoryZh && mem.memoryZh.trim() && mem.memoryZh !== mem.memory) {
+          memoryText += '\n\n【中文翻译】\n' + mem.memoryZh;
+        }
+        var parent = btn.parentElement;
+        var sel = parent ? parent.querySelector('select[data-kg-conv-select="' + name.replace(/"/g, '&quot;') + '"]') : null;
+        if (!sel) { roche.ui.toast('请先选择群聊'); return; }
+        var convId = sel.value;
+        if (!convId) { roche.ui.toast('请先选择群聊'); return; }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var char = chars.find(function (c) {
+            return (c.handle || c.name) === name || c.name === name;
+          });
+          var charId = char ? char.id : '';
+          var senderName = char ? (char.handle || char.name || name) : name;
+          await injectMessageToRoche(convId, '【国王游戏记忆】\n' + memoryText, 'char', charId, senderName);
+          roche.ui.toast('已注入到群聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    });
+
+    // 批量注入到各自单聊
+    var injectAllDmBtn = container.querySelector('[data-action="inject-all-dm"]');
+    if (injectAllDmBtn) {
+      injectAllDmBtn.onclick = async function () {
+        if (!st.charMemories || st.charMemories.length === 0) return;
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var done = 0;
+          var total = st.charMemories.length;
+          for (var i = 0; i < total; i++) {
+            var m = st.charMemories[i];
+            var char = chars.find(function (c) { return (c.handle || c.name) === m.name || c.name === m.name; });
+            if (char && char.conversationId) {
+              var memText = m.memory || '';
+              if (m.memoryZh && m.memoryZh.trim() && m.memoryZh !== m.memory) {
+                memText += '\n\n【中文翻译】\n' + m.memoryZh;
+              }
+              roche.ui.toast('正在注入 ' + (i + 1) + '/' + total + '...');
+              await injectMessageToRoche(char.conversationId, '【国王游戏记忆】\n' + memText, 'char', char.id, char.handle || char.name || m.name);
+              done++;
+            }
+          }
+          roche.ui.toast('已注入 ' + done + ' 个角色的单聊记忆');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    // 批量注入到选定群聊
+    var injectAllGroupBtn = container.querySelector('[data-action="inject-all-group"]');
+    if (injectAllGroupBtn) {
+      injectAllGroupBtn.onclick = async function () {
+        if (!st.charMemories || st.charMemories.length === 0) return;
+        var batchSel = container.querySelector('#kg-batch-group-select');
+        var convId = batchSel ? batchSel.value : '';
+        if (!convId) { roche.ui.toast('请先选择群聊'); return; }
+        try {
+          var chars = await roche.character.list();
+          if (!Array.isArray(chars)) { roche.ui.toast('无法获取角色列表'); return; }
+          var done = 0;
+          var total = st.charMemories.length;
+          for (var i = 0; i < total; i++) {
+            var m = st.charMemories[i];
+            var char = chars.find(function (c) { return (c.handle || c.name) === m.name || c.name === m.name; });
+            var charId = char ? char.id : '';
+            var senderName = char ? (char.handle || char.name || m.name) : m.name;
+            var memText = m.memory || '';
+            if (m.memoryZh && m.memoryZh.trim() && m.memoryZh !== m.memory) {
+              memText += '\n\n【中文翻译】\n' + m.memoryZh;
+            }
+            roche.ui.toast('正在注入 ' + (i + 1) + '/' + total + '...');
+            await injectMessageToRoche(convId, '【国王游戏记忆】\n' + memText, 'char', charId, senderName);
+            done++;
+          }
+          roche.ui.toast('已注入 ' + done + ' 个角色到该群聊');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    // 全局总结注入为事实记忆
+    var injectSummaryDmBtn = container.querySelector('[data-action="inject-summary-dm"]');
+    if (injectSummaryDmBtn) {
+      injectSummaryDmBtn.onclick = async function () {
+        if (!st.gameSummary || !st.gameSummary.summary) return;
+        try {
+          var userPersona = await roche.persona.getActiveUserPersona();
+          var convId = userPersona && userPersona.conversationId;
+          if (!convId) {
+            var convs = await roche.conversation.list();
+            if (Array.isArray(convs) && convs.length > 0) {
+              convId = convs[0].id || convs[0].conversationId;
+            }
+          }
+          if (!convId) { roche.ui.toast('未找到可用会话'); return; }
+          await roche.memory.write({
+            conversationId: convId,
+            summaryText: '【国王游戏总结】' + st.gameSummary.summary,
+            who: ['全体玩家'],
+            action: '玩了一局国王游戏',
+            when: '刚刚',
+            where: '国王游戏',
+            source: 'plugin'
+          });
+          roche.ui.toast('已注入为事实记忆');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+
+    // 全局总结注入为消息
+    var injectSummaryMsgBtn = container.querySelector('[data-action="inject-summary-msg"]');
+    if (injectSummaryMsgBtn) {
+      injectSummaryMsgBtn.onclick = async function () {
+        if (!st.gameSummary || !st.gameSummary.summary) return;
+        var sel = container.querySelector('#kg-summary-conv-select');
+        if (!sel || !sel.value) { roche.ui.toast('请先选择会话'); return; }
+        try {
+          await injectMessageToRoche(sel.value, '【国王游戏总结】\n' + st.gameSummary.summary, 'system', '', '游戏复盘');
+          roche.ui.toast('已注入为消息');
+        } catch (e) {
+          roche.ui.toast('注入失败: ' + (e && e.message || e));
+        }
+      };
+    }
+  }
+
+  /* ============================================================
    * 注册插件
    * ============================================================ */
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.14.2",
+    version: "1.15.0",
     apps: [
       {
         id: "mini-games-hub",
