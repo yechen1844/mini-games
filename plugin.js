@@ -7622,6 +7622,25 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     return '【本局参与者名单】\n' + lines.join('\n');
   }
 
+  // 号码已公开的参与者名单（国王下令后阶段使用，每个号码都标注对应角色）
+  function buildKingPlayerRosterFull(selfNumber) {
+    var st = kingState;
+    if (!st || !st.players) return '';
+    var lines = [];
+    st.players.forEach(function (p) {
+      var displayName = p.handle || p.name || '?';
+      var realName = p.realName || p.name || '';
+      var line = p.number + '号：' + displayName;
+      if (selfNumber && p.number === selfNumber) line += '（你）';
+      if (realName && realName !== displayName) {
+        line += '（真实姓名：' + realName + '）';
+      }
+      if (p.isUser) line += ' [user]';
+      lines.push(line);
+    });
+    return '【本局参与者名单（号码已公开）】\n' + lines.join('\n');
+  }
+
   // AI 调用 + JSON 解析（带 API 预设注入，避免修改全局 aiChat）
   async function kingAiChatJson(roche, opts, label) {
     var st = kingState;
@@ -8609,9 +8628,11 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var memoryText = await getKingCharMemoryText(roche, player);
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
     var ownHistory = kingGetCharHistoryText(player);
-    var roster = buildKingPlayerRoster(target.number);
+    var roster = buildKingPlayerRosterFull(target.number);
     var drinkCount = player.drinkCount || 0;
     var drinksLeft = 3 - drinkCount;
+    var kingIdx = st.numberMap[kingNum];
+    var kingPlayerName = kingIdx != null ? (st.players[kingIdx].handle || st.players[kingIdx].name) : '未知';
 
     var systemMsg = '【人格优先级宣言】\n' +
       '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。\n\n' +
@@ -8627,7 +8648,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '\n【当前情境】\n' +
       '你被国王(' + kingNum + '号)点到要做' + (command.type === 'truth' ? '真心话' : '大冒险') + '。\n' +
       '国王的命令：' + command.command + '\n\n' +
-      '【号码隔离】\n你知道参与者都有谁（见上方名单），但你不知道国王是谁、不知道其他号码对应谁。只知道国王的号码是' + kingNum + '号。\n\n' +
+      '【号码已公开】\n国王下令后号码已公开。国王是' + kingNum + '号（' + kingPlayerName + '）。所有号码对应的角色见上方名单。\n\n' +
       '【喝酒逃避】\n你可以选择喝酒来逃避命令。你还可以喝 ' + drinksLeft + ' 次酒（最多3次）。如果你选择喝酒，在 drink 字段设为 true，narrative 字段写你喝酒逃避的反应。但如果 drinksLeft 为 0，你必须执行命令。\n\n' +
       '【思维链要求 thinking】\n' +
       '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
@@ -8696,8 +8717,10 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
 
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
-    // 批量模式下名单不标"你"，每个角色从自己的 block 知道自己的号码
-    var roster = buildKingPlayerRoster(-1);
+    // 批量模式下名单不标"你"，每个角色从自己的 block 知道自己的号码；国王下令后号码已公开
+    var roster = buildKingPlayerRosterFull(-1);
+    var kingIdx = st.numberMap[kingNum];
+    var kingPlayerName = kingIdx != null ? (st.players[kingIdx].handle || st.players[kingIdx].name) : '未知';
 
     var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n\n' +
       '【人格优先级宣言】每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止为了"配合游戏需要"而改变自己的说话方式。\n\n' +
@@ -8710,7 +8733,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '【需要回应的目标角色】\n' +
       '以下是每个目标角色的人设和记忆，请分别以各自的口吻回应国王的命令。\n' +
       charListText + '\n\n' +
-      '【号码隔离】\n每个角色都知道参与者都有谁（见上方名单），但不知道国王是谁、不知道其他号码对应谁。只知道国王的号码是' + kingNum + '号，以及自己的号码（见各自 block）。\n\n' +
+      '【号码已公开】\n国王下令后号码已公开。国王是' + kingNum + '号（' + kingPlayerName + '）。所有号码对应的角色见上方名单。\n\n' +
       '【喝酒逃避】\n每个角色都可以选择喝酒来逃避命令（最多3次）。如果选择喝酒，drink 字段设为 true，narrative 字段写喝酒逃避的反应。如果该角色已喝够3次（dLeft 为 0），必须执行命令。\n\n' +
       '【思维链要求 thinking】\n' +
       '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
@@ -8827,7 +8850,9 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     var memoryText = await getKingCharMemoryText(roche, player);
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
     var ownHistory = kingGetCharHistoryText(player);
-    var roster = buildKingPlayerRoster(player.number);
+    var roster = buildKingPlayerRosterFull(player.number);
+    var kingIdx = st.numberMap[kingNum];
+    var kingPlayerName = kingIdx != null ? (st.players[kingIdx].handle || st.players[kingIdx].name) : '未知';
 
     var systemMsg = '【人格优先级宣言】\n' +
       '你的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止你为了"配合游戏需要"而改变自己的说话方式。\n\n' +
@@ -8841,7 +8866,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '\n【游戏公开记录】\n' + publicLogText + '\n' +
       '\n【你的个人视角记录】\n' + (ownHistory || '(无)') + '\n' +
       '\n【本轮发生的事】\n' + eventText + '\n\n' +
-      '【号码隔离】\n你知道参与者都有谁（见上方名单），但你不知道国王是谁、不知道目标是谁，只知道他们的号码。你也不知道其他号码对应谁。\n\n' +
+      '【号码已公开】\n国王下令后号码已公开。国王是' + kingNum + '号（' + kingPlayerName + '）。目标和其他号码对应的角色见上方名单。\n\n' +
       '【思维链要求 thinking】\n' +
       '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
       '2. 记忆回溯：回忆相关经历和关系\n' +
@@ -8895,8 +8920,10 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
     }
 
     var publicLogText = (st.publicLog && st.publicLog.length > 0) ? st.publicLog.join('\n') : '(无)';
-    // 批量模式下名单不标"你"，每个角色从自己的 block 知道自己的号码
-    var roster = buildKingPlayerRoster(-1);
+    // 批量模式下名单不标"你"，每个角色从自己的 block 知道自己的号码；国王下令后号码已公开
+    var roster = buildKingPlayerRosterFull(-1);
+    var kingIdx = st.numberMap[kingNum];
+    var kingPlayerName = kingIdx != null ? (st.players[kingIdx].handle || st.players[kingIdx].name) : '未知';
 
     var systemMsg = '你是一群角色，正在玩国王游戏（真心话大冒险）。\n\n' +
       '【人格优先级宣言】每个角色的第一身份是"一个人"——有着完整人格、经历、记忆和关系。说话方式是人格的产物。绝对禁止为了"配合游戏需要"而改变自己的说话方式。\n\n' +
@@ -8906,7 +8933,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
       '【本轮发生的事】\n' + eventText + '\n\n' +
       '【需要反应的角色】\n以下是每个角色的人设和记忆，请分别以各自的口吻发表对本轮事件的反应/吐槽/评论。\n' +
       charListText + '\n\n' +
-      '【号码隔离】\n每个角色都知道参与者都有谁（见上方名单），但不知道国王是谁、不知道目标是谁，只知道他们的号码。也不知道其他号码对应谁。\n\n' +
+      '【号码已公开】\n国王下令后号码已公开。国王是' + kingNum + '号（' + kingPlayerName + '）。目标和其他号码对应的角色见上方名单。\n\n' +
       '【思维链要求 thinking】\n' +
       '1. 人设全貌加载：我是谁？语气、措辞、节奏、口癖\n' +
       '2. 记忆回溯：回忆相关经历和关系\n' +
@@ -9567,7 +9594,7 @@ select.mg-input option { background: var(--mg-surface); color: var(--mg-text); }
   window.RochePlugin.register({
     id: "mini-games",
     name: "小游戏",
-    version: "1.15.1",
+    version: "1.15.2",
     apps: [
       {
         id: "mini-games-hub",
